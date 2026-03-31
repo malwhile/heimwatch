@@ -1,0 +1,37 @@
+[workspace]
+members = [
+    "crates/heimwatch-core",
+    "crates/heimwatch-collector",
+    "crates/heimwatch-storage",
+    "crates/heimwatch-web",
+    "crates/heimwatch-tui",
+    "crates/heimwatch-daemon",
+]
+resolver = "2"
+
+[package]
+name = "heimwatch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The All-Seeing Eye of Your System"
+
+# Default features for Linux/Wayland
+[features]
+default = ["linux"]
+linux = []
+macos = []
+windows = []
+bsd = []
+
+[dependencies]
+# Main binary dependencies (aggregates the workspace crates)
+heimwatch-core = { path = "crates/heimwatch-core" }
+heimwatch-collector = { path = "crates/heimwatch-collector" }
+heimwatch-storage = { path = "crates/heimwatch-storage" }
+heimwatch-web = { path = "crates/heimwatch-web" }
+heimwatch-tui = { path = "crates/heimwatch-tui" }
+heimwatch-daemon = { path = "crates/heimwatch-daemon" }
+
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
