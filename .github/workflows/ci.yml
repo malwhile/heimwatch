@@ -101,7 +101,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: target/$${{ matrix.target }}/release/heimwatch$${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          path: target/${{ matrix.target }}/release/heimwatch${{ matrix.os == 'windows-latest' && '.exe' || '' }}
           retention-days: 30
           if-no-files-found: error
 
