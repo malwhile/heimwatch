@@ -62,6 +62,27 @@ jobs:
       - name: Run Tests
         run: cargo test --workspace --all-features --verbose
 
+  coverage:
+    name: Coverage Report (Ubuntu Only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate Coverage
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: lcov.info
+
   # ---------------------------------------------------------------------------
   # Job 3: Build Release Binaries & Upload Artifacts
   # ---------------------------------------------------------------------------
