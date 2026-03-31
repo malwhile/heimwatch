@@ -15,4 +15,3 @@ pub trait ServiceManager {
     fn stop_service(&self) -> Result<(), Box<dyn std::error::Error>>;
     fn is_running(&self) -> bool;
 }
-
