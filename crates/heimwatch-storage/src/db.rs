@@ -210,6 +210,8 @@ impl StorageLayer {
         let tree = self.metrics_tree()?;
 
         // Collect all keys to delete (can't delete while iterating).
+        // Using tree.range() allows sled's B-tree to stop at the cutoff rather than
+        // loading all matching keys into memory.
         let mut keys_to_delete = Vec::new();
 
         for metric_type in [
@@ -221,14 +223,11 @@ impl StorageLayer {
             MetricType::Dsk,
             MetricType::Gpu,
         ] {
-            let range_end_bytes = keys::range_end(&metric_type, cutoff);
-            for item in tree.scan_prefix(metric_type.prefix().as_bytes()) {
+            let range_start = keys::range_start(&metric_type, 0);
+            let range_end = keys::range_end(&metric_type, cutoff);
+            for item in tree.range(range_start..=range_end) {
                 let (key, _) = item?;
-                if key[..] <= range_end_bytes[..] {
-                    keys_to_delete.push(key.to_vec());
-                } else {
-                    break;
-                }
+                keys_to_delete.push(key.to_vec());
             }
         }
 
