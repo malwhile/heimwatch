@@ -1,5 +1,7 @@
 // crates/heimwatch-core/src/lib.rs
 
+pub mod process;
+
 /// OS Abstraction Trait for Data Collection
 /// Implement this for each target platform (Linux, macOS, Windows, BSD)
 pub trait Collector {
