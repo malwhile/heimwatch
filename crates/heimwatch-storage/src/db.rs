@@ -201,7 +201,7 @@ impl StorageLayer {
     pub fn cleanup_old_data(&self, retention_days: u32) -> Result<u64, StorageError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| StorageError::DatabaseClosed)?
+            .map_err(|_| StorageError::SystemTimeError)?
             .as_secs();
 
         let retention_seconds = retention_days as u64 * 86_400;

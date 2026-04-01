@@ -24,4 +24,8 @@ pub enum StorageError {
     /// Invalid key format or decoding error.
     #[error("invalid key format: {0}")]
     InvalidKey(String),
+
+    /// System time error (e.g., clock not available).
+    #[error("system time error")]
+    SystemTimeError,
 }
