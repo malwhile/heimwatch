@@ -276,4 +276,10 @@ impl StorageLayer {
             None => Ok(None),
         }
     }
+
+    /// Manually flush the database transactions to disk
+    pub fn flush(&self) -> Result<(), StorageError> {
+        self.db.flush()?;
+        Ok(())
+    }
 }

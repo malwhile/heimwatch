@@ -1,7 +1,9 @@
-use heimwatch_storage::{
-    CpuData, MetricPayload, MetricRecord, MetricType, NetworkData, StorageLayer,
-};
+use std::sync::Arc;
 use tempfile::TempDir;
+
+use heimwatch_storage::{
+    CpuData, MetricPayload, MetricRecord, MetricType, NetworkData, StorageError, StorageLayer,
+};
 
 fn create_test_db() -> (StorageLayer, TempDir) {
     let tmpdir = TempDir::new().unwrap();
@@ -207,4 +209,49 @@ fn test_metadata_operations() {
     db.set_last_cleanup_ts(1000).unwrap();
     let ts = db.get_last_cleanup_ts().unwrap();
     assert_eq!(ts, Some(1000));
+}
+
+#[test]
+fn test_key_collision_overwrites() {
+    let (db, _tmpdir) = create_test_db();
+    let r1 = make_cpu_record("app", 1000, 10.0);
+    let r2 = make_cpu_record("app", 1000, 20.0);
+    db.insert_metric(&r1).unwrap();
+    db.insert_metric(&r2).unwrap();
+    let results = db.get_metrics_by_type(MetricType::Cpu, 0, 2000).unwrap();
+    assert_eq!(results.len(), 1);
+    if let MetricPayload::Cpu(cpu_results) = &results[0].payload {
+        assert_eq!(cpu_results.usage_percent, 20.0);
+    } else {
+        panic!("Not a cpu result");
+    }
+}
+
+#[test]
+fn test_concurrent_inserts() {
+    let (db, _tmpdir) = create_test_db();
+    let db = std::sync::Arc::new(db);
+    let handles: Vec<_> = (0..10)
+        .map(|i| {
+            let db = Arc::clone(&db);
+            std::thread::spawn(move || {
+                for j in 0..10 {
+                    let record = make_cpu_record("app", 1000 + (i * 10 + j) as u64, 10.0);
+                    db.insert_metric(&record).unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let results = db.get_metrics_by_type(MetricType::Cpu, 0, 2000).unwrap();
+    assert_eq!(results.len(), 100);
+}
+
+#[test]
+fn test_aggregated_cpu_not_found() {
+    let (db, _tmpdir) = create_test_db();
+    let result = db.get_aggregated_cpu("nonexistent", 0, 1000);
+    assert!(matches!(result, Err(StorageError::NotFound)));
 }
