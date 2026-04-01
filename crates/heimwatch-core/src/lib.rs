@@ -1,5 +1,8 @@
 // crates/heimwatch-core/src/lib.rs
 
+pub mod metrics;
+pub use metrics::*;
+
 /// OS Abstraction Trait for Data Collection
 /// Implement this for each target platform (Linux, macOS, Windows, BSD)
 pub trait Collector {
