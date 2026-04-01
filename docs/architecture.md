@@ -66,30 +66,30 @@ The project is structured as a Cargo Workspace with the following crates:
 
 ### 5.1. Language: Rust
 
-- Reasoning: Memory safety without garbage collection, zero-cost abstractions, and excellent cross-compilation support.
-- Impact: Ensures the daemon is safe to run as a background service with minimal risk of memory leaks or crashes.
+- **Reasoning**: Memory safety without garbage collection, zero-cost abstractions, and excellent cross-compilation support.
+- **Impact**: Ensures the daemon is safe to run as a background service with minimal risk of memory leaks or crashes.
 
 ### 5.2. Database: Sled (Embedded KV Store)
 
-- Reasoning: Chosen over SQLite for its lock-free architecture, simplicity, and lack of external dependencies.
-- Schema Strategy: Keys are structured as metric\_type:timestamp:pid to enable efficient time-range scans. Values are serialized JSON blobs.
-- Trade-off: Less SQL-like querying power than SQLite, but faster for append-heavy time-series workloads.
+- **Reasoning**: Chosen over SQLite for its lock-free architecture, simplicity, and lack of external dependencies.
+- **Schema Strategy**: Keys are structured as metric\_type:timestamp:pid to enable efficient time-range scans. Values are serialized JSON blobs.
+- **Trade-off**: Less SQL-like querying power than SQLite, but faster for append-heavy time-series workloads.
 
 ### 5.3. Web Interface: Axum + HTMX + Chart.js
 
-- Reasoning:
-    - Axum: Ergonomic, high-performance Rust web framework.
-    - HTMX: Allows dynamic UI updates without heavy JavaScript frameworks (React/Vue), keeping the frontend lightweight.
-    - Chart.js: Standard library for rendering time-series graphs.
-- Deployment: Static assets are embedded directly into the binary (include_str!), resulting in a single portable executable.
+- **Reasoning**:
+    - **Axum**: Ergonomic, high-performance Rust web framework.
+    - **HTMX**: Allows dynamic UI updates without heavy JavaScript frameworks (React/Vue), keeping the frontend lightweight.
+    - **Chart.js**: Standard library for rendering time-series graphs.
+- **Deployment**: Static assets are embedded directly into the binary (include_str!), resulting in a single portable executable.
 
 ### 5.4. Async Runtime: Tokio
 
-- Reasoning: Industry standard for async Rust. Required for non-blocking I/O when monitoring network traffic and handling multiple collectors simultaneously.
+- **Reasoning**: Industry standard for async Rust. Required for non-blocking I/O when monitoring network traffic and handling multiple collectors simultaneously.
 
 ### 5.5. OS Abstraction: Trait-Based
 
-- Strategy: Define a Collector trait in heimwatch-core.
+- **Strategy**: Define a Collector trait in heimwatch-core.
 
 ```rust
 pub trait Collector {
