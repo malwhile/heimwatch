@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Integration tests for NetworkCollector BPF interaction.
 //!
 //! These tests verify:
@@ -9,6 +11,7 @@
 //! 6. Zero-traffic scenarios and missing PID handling
 //!
 //! Prerequisites: CAP_BPF + CAP_PERFMON or root (Linux 5.8+)
+//! Linux-only: eBPF is a Linux kernel feature
 //! Run with: cargo test --test network_integration -- --nocapture
 
 use std::collections::HashMap;
