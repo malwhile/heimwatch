@@ -28,10 +28,11 @@ pub fn get_process_name(pid: u32) -> Result<String, Box<dyn std::error::Error>> 
     {
         get_process_name_macos(pid)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Err("Process name lookup not implemented for this platform".into())
-    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn get_process_name(_pid: u32) -> Result<String, Box<dyn std::error::Error>> {
+    Err("Process name lookup not implemented for this platform".into())
 }
 
 #[cfg(target_os = "linux")]
