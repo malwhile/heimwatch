@@ -1,3 +1,4 @@
+ #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 
 /// Retrieves the process/app name from a given PID.
@@ -17,6 +18,7 @@ use std::path::Path;
 /// let name = get_process_name(1234)?;
 /// assert_eq!(name, "zen");
 /// ```
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn get_process_name(pid: u32) -> Result<String, Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     {
