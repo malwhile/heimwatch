@@ -1,3 +1,8 @@
+//! Linux network collector using eBPF for kernel-space monitoring.
+//!
+//! Requires: CAP_BPF + CAP_PERFMON or root (Linux 5.8+)
+//! Uses: aya framework for eBPF program loading and kprobe attachment
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,7 +43,7 @@ impl NetworkCollector {
             .program_mut("trace_recvmsg")
             .ok_or("trace_recvmsg not found")?
             .try_into()
-            .map_err(|_| "trace_recvmsg is not a kprobe")?;
+            .map_err(|_| "trace_recvmsg is not a kretprobe")?;
         recvmsg_prog.load()?;
         recvmsg_prog.attach("tcp_recvmsg", 0)?;
 

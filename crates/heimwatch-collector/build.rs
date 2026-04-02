@@ -1,6 +1,14 @@
 use std::path::PathBuf;
 
 fn main() {
+    // Only build eBPF on Linux targets
+    // macOS and Windows don't use eBPF for network monitoring
+    #[cfg(target_os = "linux")]
+    build_ebpf_stub();
+}
+
+#[cfg(target_os = "linux")]
+fn build_ebpf_stub() {
     // TODO: Implement proper eBPF cross-compilation using custom target specs or aya-build
     // For now, create a minimal stub ELF to allow the rest of the code to compile
 
