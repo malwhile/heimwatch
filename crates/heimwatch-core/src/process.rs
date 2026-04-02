@@ -71,10 +71,10 @@ fn get_process_name_macos(pid: u32) -> Result<String, Box<dyn std::error::Error>
         let trimmed = name.trim();
 
         // ps output may include the full path; extract just the basename
-        if let Some(base_name) = Path::new(trimmed).file_name() {
-            if let Some(base_str) = base_name.to_str() {
-                return Ok(base_str.to_string());
-            }
+        if let Some(base_name) = Path::new(trimmed).file_name()
+            && let Some(base_str) = base_name.to_str()
+        {
+            return Ok(base_str.to_string());
         }
 
         Ok(trimmed.to_string())
