@@ -34,6 +34,7 @@ help:
 	@echo "  make dev                - Quick checks: check + fmt-check + lint + test"
 	@echo "  make all                - Full pipeline: fmt + lint + test + build-release"
 	@echo "  make ci                 - CI pipeline: fmt-check + lint + test + ebpf-check + build"
+	@echo "  make code-quality       - Does basic code quality checks: fmt + lint+ check + ebpf-check"
 	@echo ""
 
 # Build targets
@@ -115,3 +116,6 @@ dev-setup: install-tools check fmt-check lint test
 
 ci: fmt-check lint test build-ebpf build
 	@echo "✓ CI checks passed!"
+
+code-quality: fmt lint check ebpf-check
+	@echo "✓ Quality checks passed!"

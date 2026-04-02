@@ -40,14 +40,12 @@ fn get_process_name_linux(pid: u32) -> Result<String, Box<dyn std::error::Error>
     let cmdline_path = format!("/proc/{}/cmdline", pid);
     if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
         // cmdline uses null bytes as separators; take the first argument
-        if let Some(exe_path) = cmdline.split('\0').next() {
-            if !exe_path.is_empty() {
-                if let Some(name) = Path::new(exe_path).file_name() {
-                    if let Some(name_str) = name.to_str() {
-                        return Ok(name_str.to_string());
-                    }
-                }
-            }
+        if let Some(exe_path) = cmdline.split('\0').next()
+            && !exe_path.is_empty()
+            && let Some(name) = Path::new(exe_path).file_name()
+            && let Some(name_str) = name.to_str()
+        {
+            return Ok(name_str.to_string());
         }
     }
 
