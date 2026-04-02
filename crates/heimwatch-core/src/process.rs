@@ -1,4 +1,5 @@
- #[cfg(any(target_os = "linux", target_os = "macos"))]
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 
 /// Retrieves the process/app name from a given PID.
