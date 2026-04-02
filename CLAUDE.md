@@ -54,6 +54,62 @@ cargo check
 cargo doc --no-deps --open
 ```
 
+## eBPF Development Setup
+
+Network traffic monitoring uses eBPF (extended Berkeley Packet Filter) for kernel-space byte counting. The eBPF crates (`heimwatch-ebpf-common` and `heimwatch-ebpf`) require additional toolchain setup.
+
+### One-Time Prerequisites
+
+```bash
+# Install nightly Rust toolchain with rust-src component
+# Note: bpf-unknown-unknown is built from rust-src; no pre-built target exists
+rustup toolchain install nightly --component rust-src
+
+# Install bpf-linker (LLVM-based BPF linker; requires LLVM 18+)
+cargo install bpf-linker
+```
+
+### Building eBPF Programs
+
+The `heimwatch-collector` crate has a `build.rs` that automatically cross-compiles the eBPF program during `cargo build`. No manual compilation is needed; the above setup is only required once per development machine.
+
+To verify the BPF program builds standalone:
+
+```bash
+cargo +nightly build --target bpf-unknown-unknown -p heimwatch-ebpf
+```
+
+The compiled ELF object is embedded in the user-space `heimwatch-collector` binary at build time.
+
+### Troubleshooting eBPF Issues
+
+If the daemon fails to attach BPF probes at runtime, use these diagnostics:
+
+**Check kernel version:**
+```bash
+uname -r
+# Should be 4.x or later (5.4+ recommended)
+```
+
+**Verify capabilities:**
+```bash
+getcap /path/to/heimwatch
+# Should show: cap_bpf,cap_perfmon+ep
+```
+
+**Check kernel logs for BPF errors:**
+```bash
+dmesg | grep -i bpf
+# Look for any "BPF" or "eBPF" errors
+```
+
+**View kernel trace buffer (eBPF warnings):**
+```bash
+cat /sys/kernel/debug/tracing/trace | grep NETWORK_STATS
+# Shows if BPF map is full or other warnings
+# (Enable with: echo 1 > /sys/kernel/debug/tracing/events/enable)
+```
+
 ## GitHub Automation
 
 The `gh-scripts/` directory contains scripts for managing GitHub project infrastructure:

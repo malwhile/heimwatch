@@ -7,6 +7,12 @@ members = [
     "crates/heimwatch-tui",
     "crates/heimwatch-daemon",
 ]
+exclude = [
+    # eBPF crates target bpf-unknown-unknown and use nightly.
+    # They are built separately via build.rs in heimwatch-collector.
+    "crates/heimwatch-ebpf-common",
+    "crates/heimwatch-ebpf",
+]
 resolver = "2"
 
 [package]

@@ -30,6 +30,64 @@ Heimwatch is built as a modular Rust workspace:
 - **`heimwatch-tui`**: Ratatui-based terminal interface.
 - **`heimwatch-daemon`**: Service management (systemd, launchd, etc.).
 
+## 📋 System Requirements
+
+### Linux (Minimum)
+
+- **Kernel Version**: Linux 4.x or later (5.4+ recommended for improved BTF/CO-RE stability across kernel versions).
+- **Capabilities**: The daemon must run with either:
+  - `CAP_BPF` and `CAP_PERFMON` (preferred; Linux 5.8+), OR
+  - `root` privileges
+
+  To grant capabilities to the binary without requiring root:
+  ```bash
+  sudo setcap cap_bpf,cap_perfmon+ep /path/to/heimwatch
+  ```
+
+- **Process Limit**: Heimwatch tracks up to 10,240 concurrent processes. Container orchestration systems (Kubernetes, Docker Swarm) that spawn large numbers of processes or containers may hit this limit. Future versions will support configurable limits; see the [roadmap](#-roadmap) for details on Phase 3+ scaling improvements.
+
+### macOS, Windows, BSD
+
+Not yet implemented. See [Phase 8](#-roadmap) of the roadmap.
+
+## 👨‍💻 Developer Setup
+
+### Building on Linux
+
+Heimwatch uses eBPF for kernel-space network monitoring. Building requires the nightly Rust toolchain with `rust-src`.
+
+**One-time setup:**
+```bash
+# Install nightly Rust toolchain with rust-src component
+# Note: bpf-unknown-unknown is built from rust-src; no pre-built target exists
+rustup toolchain install nightly --component rust-src
+
+# Install bpf-linker (LLVM-based BPF linker; requires LLVM 18+)
+cargo install bpf-linker
+```
+
+**Build and run:**
+```bash
+cargo build --release
+```
+
+The `build.rs` script in `heimwatch-collector` automatically cross-compiles the eBPF program and embeds it in the binary.
+
+### Running the Daemon
+
+After building, grant the necessary capabilities or run as root:
+
+```bash
+# Option 1: Grant minimal capabilities (preferred)
+sudo setcap cap_bpf,cap_perfmon+ep ./target/release/heimwatch
+
+# Then run without sudo
+./target/release/heimwatch
+
+# Option 2: Run with sudo
+sudo ./target/release/heimwatch
+```
+
 ## 🚀 Roadmap
 
 - [ ] **Phase 1**: Project scaffolding, CI/CD, and architecture design.
