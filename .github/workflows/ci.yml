@@ -78,10 +78,10 @@ jobs:
       - name: Generate Coverage
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v3
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
         with:
-          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------------------
   # Job 3: Build Release Binaries & Upload Artifacts

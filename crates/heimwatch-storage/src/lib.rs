@@ -1,14 +1,12 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! heimwatch-storage: Time-series persistence using sled.
+//!
+//! This crate provides the StorageLayer interface for persisting and querying
+//! application metrics collected by heimwatch collectors.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod db;
+mod error;
+mod keys;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use db::StorageLayer;
+pub use error::StorageError;
+pub use heimwatch_core::metrics::*;

@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+heimwatch-core = { path = "../heimwatch-core" }
+sled = "0.34"
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
