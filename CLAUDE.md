@@ -56,9 +56,15 @@ cargo doc --no-deps --open
 
 ## eBPF Development Setup
 
-Network traffic monitoring uses eBPF (extended Berkeley Packet Filter) for kernel-space byte counting. The eBPF crates (`heimwatch-ebpf-common` and `heimwatch-ebpf`) require additional toolchain setup.
+**⚠️ Linux Only**: eBPF is a Linux kernel feature. The `heimwatch-ebpf` and `heimwatch-ebpf-common` crates are excluded from the workspace and only compile on Linux.
 
-### One-Time Prerequisites
+- **On Linux**: Full eBPF setup required (see below)
+- **On macOS/Windows**: `cargo build` works without eBPF; these crates are skipped
+- Both platforms can run tests and use the collector (Linux with eBPF, macOS/Windows with stubs)
+
+Network traffic monitoring uses eBPF (extended Berkeley Packet Filter) for kernel-space byte counting on Linux. The eBPF crates require additional toolchain setup (Linux developers only).
+
+### One-Time Prerequisites (Linux only)
 
 ```bash
 # Install nightly Rust toolchain with rust-src component

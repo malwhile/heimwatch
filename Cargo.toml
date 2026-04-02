@@ -8,8 +8,11 @@ members = [
     "crates/heimwatch-daemon",
 ]
 exclude = [
-    # eBPF crates target bpf-unknown-unknown and use nightly.
-    # They are built separately via build.rs in heimwatch-collector.
+    # eBPF crates are Linux-only (eBPF is a Linux kernel feature).
+    # They target bpf-unknown-unknown and require nightly Rust.
+    # Built separately via build.rs in heimwatch-collector on Linux only.
+    # On macOS/Windows, these crates are skipped entirely.
+    # See: crates/heimwatch-ebpf/build.rs, crates/heimwatch-ebpf-common/build.rs
     "crates/heimwatch-ebpf-common",
     "crates/heimwatch-ebpf",
 ]
