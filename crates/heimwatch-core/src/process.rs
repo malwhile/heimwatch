@@ -1,4 +1,3 @@
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 
 /// Retrieves the process/app name from a given PID.
@@ -37,11 +36,9 @@ pub fn get_process_name(_pid: u32) -> Result<String, Box<dyn std::error::Error>>
 
 #[cfg(target_os = "linux")]
 fn get_process_name_linux(pid: u32) -> Result<String, Box<dyn std::error::Error>> {
-    use std::fs;
-
     // Try /proc/[PID]/cmdline first (more reliable for full paths)
     let cmdline_path = format!("/proc/{}/cmdline", pid);
-    if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
+    if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
         // cmdline uses null bytes as separators; take the first argument
         if let Some(exe_path) = cmdline.split('\0').next()
             && !exe_path.is_empty()
@@ -53,7 +50,7 @@ fn get_process_name_linux(pid: u32) -> Result<String, Box<dyn std::error::Error>
 
     // Fallback to /proc/[PID]/comm (limited to 15 chars but always available)
     let comm_path = format!("/proc/{}/comm", pid);
-    let comm = fs::read_to_string(&comm_path)?;
+    let comm = std::fs::read_to_string(&comm_path)?;
     Ok(comm.trim().to_string())
 }
 
