@@ -78,6 +78,7 @@ fn get_process_name_macos(pid: u32) -> Result<String, Box<dyn std::error::Error>
     }
 }
 
+#[allow(dead_code)]
 fn extract_process_name(path: &str) -> Option<String> {
     if let Some(base) = Path::new(path).file_name()
         && let Some(base_str) = base.to_str()
