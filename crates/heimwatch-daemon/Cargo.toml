@@ -1,6 +1,19 @@
 [package]
 name = "heimwatch-daemon"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "heimwatch-daemon"
+path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+heimwatch-core.workspace = true
+heimwatch-collector.workspace = true
+heimwatch-storage.workspace = true
+strum_macros.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "signal"] }
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true

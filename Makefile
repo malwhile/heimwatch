@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-ebpf ebpf-standalone build-core build-collector build-storage build-web build-tui build-daemon test test-all check fmt fmt-check lint clean install-tools ebpf-check dev-setup dev ci all
+.PHONY: help build build-release build-ebpf ebpf-standalone build-core build-collector build-storage build-web build-tui build-daemon test test-all test-parallel test-verbose test-nocapture check fmt fmt-check lint clean install-tools install-nextest ebpf-check dev-setup dev ci code-quality all
 
 # Default target
 help:
@@ -17,8 +17,11 @@ help:
 	@echo "  make build-daemon       - Build heimwatch-daemon crate"
 	@echo ""
 	@echo "Testing & Quality:"
-	@echo "  make test               - Run tests for all crates"
-	@echo "  make test-all           - Run all tests with verbose output"
+	@echo "  make test               - Run tests for all crates (fast parallel with nextest)"
+	@echo "  make test-parallel      - Run tests in parallel with nextest (default)"
+	@echo "  make test-verbose       - Run tests with verbose output (nextest)"
+	@echo "  make test-nocapture     - Run tests without output capture (nextest)"
+	@echo "  make test-all           - Run all tests with verbose output (legacy cargo test)"
 	@echo "  make check              - Check compilation without building"
 	@echo "  make fmt                - Format all code"
 	@echo "  make fmt-check          - Check code formatting"
@@ -27,6 +30,7 @@ help:
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make install-tools      - Install required build tools (nightly, bpf-linker)"
+	@echo "  make install-nextest    - Install cargo-nextest (fast test runner)"
 	@echo "  make clean              - Remove build artifacts"
 	@echo ""
 	@echo "Convenience (Multi-step):"
@@ -69,8 +73,16 @@ ebpf-standalone:
 	cargo +nightly build --target bpf-unknown-unknown --manifest-path crates/heimwatch-ebpf/Cargo.toml
 
 # Testing targets
-test:
-	cargo test --workspace --lib
+test: test-parallel
+
+test-parallel:
+	cargo nextest run --workspace
+
+test-verbose:
+	cargo nextest run --workspace --verbose
+
+test-nocapture:
+	cargo nextest run --workspace -- --nocapture
 
 test-all:
 	cargo test --workspace --verbose
@@ -98,6 +110,9 @@ install-tools:
 	cargo install bpf-linker
 	@echo "Build tools installed successfully!"
 
+install-nextest:
+	cargo install cargo-nextest
+
 # Cleanup
 clean:
 	cargo clean
@@ -111,7 +126,7 @@ all: fmt lint test build-release
 dev: check fmt-check lint test
 	@echo "✓ Development checks passed!"
 
-dev-setup: install-tools check fmt-check lint test
+dev-setup: install-tools install-nextest check fmt-check lint test
 	@echo "✓ Development environment ready!"
 
 ci: fmt-check lint test build-ebpf build

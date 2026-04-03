@@ -1,8 +1,9 @@
 [package]
 name = "heimwatch-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-chrono = { version = "0.4", features = ["serde"] }
+anyhow.workspace = true
+serde.workspace = true
+chrono.workspace = true

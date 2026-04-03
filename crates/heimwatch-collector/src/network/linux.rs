@@ -3,13 +3,13 @@
 //! Requires: CAP_BPF + CAP_PERFMON or root (Linux 5.8+)
 //! Uses: aya framework for eBPF program loading and kprobe attachment
 
+use crate::error::CollectorError;
+use anyhow::Result;
 use std::collections::HashMap;
-use std::error::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use aya::Ebpf;
 use aya::programs::KProbe;
-use heimwatch_core::{Collector, MetricPayload, MetricRecord, NetworkData};
+use heimwatch_core::{MetricPayload, MetricRecord, NetworkData, current_unix_timestamp};
 use heimwatch_ebpf_common::PidNetStats;
 
 /// Embedded BPF object, compiled by build.rs at build time.
@@ -24,28 +24,28 @@ pub struct NetworkCollector {
     prev_state: HashMap<String, PidNetStats>,
 }
 
+/// Load and attach a kprobe program.
+fn load_and_attach_kprobe(bpf: &mut Ebpf, prog_name: &str, kernel_func: &str) -> Result<()> {
+    let prog: &mut KProbe = bpf
+        .program_mut(prog_name)
+        .ok_or_else(|| CollectorError::ProgramNotFound(prog_name.to_string()))?
+        .try_into()
+        .map_err(|_| CollectorError::ProgramTypeMismatch(prog_name.to_string()))?;
+    prog.load()?;
+    prog.attach(kernel_func, 0)?;
+    Ok(())
+}
+
 impl NetworkCollector {
     /// Load and attach the BPF kprobes. Requires CAP_BPF or root.
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Result<Self> {
         let mut bpf = Ebpf::load(BPF_BYTES)?;
 
         // Attach kprobe to tcp_sendmsg (tx)
-        let sendmsg_prog: &mut KProbe = bpf
-            .program_mut("trace_sendmsg")
-            .ok_or("trace_sendmsg not found")?
-            .try_into()
-            .map_err(|_| "trace_sendmsg is not a kprobe")?;
-        sendmsg_prog.load()?;
-        sendmsg_prog.attach("tcp_sendmsg", 0)?;
+        load_and_attach_kprobe(&mut bpf, "trace_sendmsg", "tcp_sendmsg")?;
 
         // Attach kretprobe to tcp_recvmsg (rx)
-        let recvmsg_prog: &mut KProbe = bpf
-            .program_mut("trace_recvmsg")
-            .ok_or("trace_recvmsg not found")?
-            .try_into()
-            .map_err(|_| "trace_recvmsg is not a kretprobe")?;
-        recvmsg_prog.load()?;
-        recvmsg_prog.attach("tcp_recvmsg", 0)?;
+        load_and_attach_kprobe(&mut bpf, "trace_recvmsg", "tcp_recvmsg")?;
 
         Ok(NetworkCollector {
             bpf,
@@ -61,8 +61,8 @@ impl NetworkCollector {
     /// - Aggregates stats by app_name (handles multiple PIDs per app).
     /// - Subtracts previous snapshot to get per-interval deltas.
     /// - If current < previous for an app, the PID was reused — treat as 0 delta.
-    pub fn collect(&mut self) -> Result<Vec<MetricRecord>, Box<dyn Error>> {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    pub fn collect_network(&mut self) -> Result<Vec<MetricRecord>> {
+        let timestamp = current_unix_timestamp()?;
 
         // Get the NETWORK_STATS map from the BPF program
         // Note: For now, we read it as raw bytes and parse manually
@@ -70,7 +70,7 @@ impl NetworkCollector {
         let _map_ref = self
             .bpf
             .map("NETWORK_STATS")
-            .ok_or("NETWORK_STATS map not found")?;
+            .ok_or_else(|| CollectorError::MapNotFound("NETWORK_STATS".to_string()))?;
 
         // Aggregate current totals by app name (multiple PIDs → same app)
         let current_by_app: HashMap<String, PidNetStats> = HashMap::new();
@@ -106,23 +106,5 @@ impl NetworkCollector {
         self.prev_state = current_by_app;
 
         Ok(records)
-    }
-}
-
-impl Collector for NetworkCollector {
-    fn collect_network(&mut self) -> Result<Vec<MetricRecord>, Box<dyn std::error::Error>> {
-        self.collect()
-    }
-
-    fn collect_power(&self) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(())
-    }
-
-    fn collect_focus(&self) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(())
-    }
-
-    fn collect_system_metrics(&self) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(())
     }
 }

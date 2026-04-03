@@ -1,11 +1,11 @@
 [package]
 name = "heimwatch-ebpf"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-aya-ebpf = "0.1"
-aya-log-ebpf = "0.1"
+aya-ebpf = { version = "0.1" }
+aya-log-ebpf = { version = "0.1" }
 heimwatch-ebpf-common = { path = "../heimwatch-ebpf-common" }
 
 [[bin]]

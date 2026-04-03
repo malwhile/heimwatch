@@ -10,11 +10,16 @@
 
 use crate::error::StorageError;
 use crate::keys;
+use anyhow::{Context, Result};
 use heimwatch_core::{
     AppNetworkStats, CpuData, MetricPayload, MetricRecord, MetricType, NetworkData,
+    current_unix_timestamp,
 };
 use sled::Db;
 use std::collections::HashMap;
+
+const META_LAST_CLEANUP: &[u8; 17] = b"meta:last_cleanup";
+const CONFIG_RETENTION_DAYS: &[u8; 21] = b"config:retention_days";
 
 /// Main storage interface using sled.
 ///
@@ -28,7 +33,7 @@ pub struct StorageLayer {
 
 impl StorageLayer {
     /// Open or create a sled database at the given path.
-    pub fn open(path: &str) -> Result<Self, StorageError> {
+    pub fn open(path: &str) -> Result<Self> {
         let config = sled::Config::new()
             .path(path)
             .cache_capacity(256 * 1024 * 1024) // 256 MB cache
@@ -39,17 +44,29 @@ impl StorageLayer {
     }
 
     /// Get the metrics tree, creating it if necessary.
-    fn metrics_tree(&self) -> Result<sled::Tree, StorageError> {
+    fn metrics_tree(&self) -> Result<sled::Tree> {
         Ok(self.db.open_tree("metrics")?)
     }
 
     /// Get the metadata tree, creating it if necessary.
-    fn meta_tree(&self) -> Result<sled::Tree, StorageError> {
+    fn meta_tree(&self) -> Result<sled::Tree> {
         Ok(self.db.open_tree("meta")?)
     }
 
+    fn get_metadata<T: serde::de::DeserializeOwned>(
+        &self,
+        tree: &sled::Tree,
+        key: &[u8],
+        default: T,
+    ) -> anyhow::Result<T> {
+        match tree.get(key)? {
+            Some(v) => serde_json::from_slice(&v).context("Metadata deserialization"),
+            None => Ok(default),
+        }
+    }
+
     /// Insert a single metric record.
-    pub fn insert_metric(&self, record: &MetricRecord) -> Result<(), StorageError> {
+    pub fn insert_metric(&self, record: &MetricRecord) -> Result<()> {
         let tree = self.metrics_tree()?;
         let metric_type = record.payload.metric_type();
         let key = keys::encode_key(&metric_type, record.timestamp, &record.app_name);
@@ -61,7 +78,7 @@ impl StorageLayer {
     /// Insert multiple metric records atomically.
     ///
     /// Uses a sled Batch for atomic writes and reduced I/O.
-    pub fn insert_metrics_batch(&self, records: &[MetricRecord]) -> Result<(), StorageError> {
+    pub fn insert_metrics_batch(&self, records: &[MetricRecord]) -> Result<()> {
         let tree = self.metrics_tree()?;
         let mut batch = sled::Batch::default();
 
@@ -82,7 +99,7 @@ impl StorageLayer {
         metric_type: MetricType,
         start: u64,
         end: u64,
-    ) -> Result<Vec<MetricRecord>, StorageError> {
+    ) -> Result<Vec<MetricRecord>> {
         let tree = self.metrics_tree()?;
         let range_start = keys::range_start(&metric_type, start);
         let range_end = keys::range_end(&metric_type, end);
@@ -107,20 +124,12 @@ impl StorageLayer {
         app_name: &str,
         start: u64,
         end: u64,
-    ) -> Result<Vec<MetricRecord>, StorageError> {
+    ) -> Result<Vec<MetricRecord>> {
         let mut results = Vec::new();
 
         // Scan all metric types
-        for metric_type in [
-            MetricType::Net,
-            MetricType::Pwr,
-            MetricType::Foc,
-            MetricType::Cpu,
-            MetricType::Mem,
-            MetricType::Dsk,
-            MetricType::Gpu,
-        ] {
-            let records = self.get_metrics_by_type(metric_type, start, end)?;
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let records = self.get_metrics_by_type(*metric_type, start, end)?;
             for record in records {
                 if record.app_name == app_name {
                     results.push(record);
@@ -132,12 +141,7 @@ impl StorageLayer {
     }
 
     /// Calculate the mean CPU usage for an app over a time range.
-    pub fn get_aggregated_cpu(
-        &self,
-        app_name: &str,
-        start: u64,
-        end: u64,
-    ) -> Result<f32, StorageError> {
+    pub fn get_aggregated_cpu(&self, app_name: &str, start: u64, end: u64) -> Result<f32> {
         let records = self.get_metrics_by_app(app_name, start, end)?;
         let cpu_records: Vec<f32> = records
             .iter()
@@ -148,7 +152,7 @@ impl StorageLayer {
             .collect();
 
         if cpu_records.is_empty() {
-            return Err(StorageError::NotFound);
+            return Err(StorageError::NotFound.into());
         }
 
         let mean = cpu_records.iter().sum::<f32>() / cpu_records.len() as f32;
@@ -161,7 +165,7 @@ impl StorageLayer {
         start: u64,
         end: u64,
         limit: usize,
-    ) -> Result<Vec<AppNetworkStats>, StorageError> {
+    ) -> Result<Vec<AppNetworkStats>> {
         let records = self.get_metrics_by_type(MetricType::Net, start, end)?;
 
         let mut app_totals: HashMap<String, (u64, u64)> = HashMap::new();
@@ -198,11 +202,8 @@ impl StorageLayer {
     }
 
     /// Delete records older than the retention period, returning the count deleted.
-    pub fn cleanup_old_data(&self, retention_days: u32) -> Result<u64, StorageError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| StorageError::SystemTimeError)?
-            .as_secs();
+    pub fn cleanup_old_data(&self, retention_days: u32) -> Result<u64> {
+        let now = current_unix_timestamp()?;
 
         let retention_seconds = retention_days as u64 * 86_400;
         let cutoff = now.saturating_sub(retention_seconds);
@@ -214,17 +215,9 @@ impl StorageLayer {
         // loading all matching keys into memory.
         let mut keys_to_delete = Vec::new();
 
-        for metric_type in [
-            MetricType::Net,
-            MetricType::Pwr,
-            MetricType::Foc,
-            MetricType::Cpu,
-            MetricType::Mem,
-            MetricType::Dsk,
-            MetricType::Gpu,
-        ] {
-            let range_start = keys::range_start(&metric_type, 0);
-            let range_end = keys::range_end(&metric_type, cutoff);
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
             for item in tree.range(range_start..=range_end) {
                 let (key, _) = item?;
                 keys_to_delete.push(key.to_vec());
@@ -244,41 +237,35 @@ impl StorageLayer {
     }
 
     /// Set the retention period in days.
-    pub fn set_retention_days(&self, days: u32) -> Result<(), StorageError> {
+    pub fn set_retention_days(&self, days: u32) -> Result<()> {
         let tree = self.meta_tree()?;
         let value = serde_json::to_vec(&days)?;
-        tree.insert(b"config:retention_days", value)?;
+        tree.insert(CONFIG_RETENTION_DAYS, value)?;
         Ok(())
     }
 
     /// Get the retention period in days, defaulting to 7 if not set.
-    pub fn get_retention_days(&self) -> Result<u32, StorageError> {
+    pub fn get_retention_days(&self) -> Result<u32> {
         let tree = self.meta_tree()?;
-        match tree.get(b"config:retention_days")? {
-            Some(value) => Ok(serde_json::from_slice(&value)?),
-            None => Ok(7),
-        }
+        self.get_metadata(&tree, CONFIG_RETENTION_DAYS, 7)
     }
 
     /// Set the timestamp of the last cleanup operation.
-    pub fn set_last_cleanup_ts(&self, ts: u64) -> Result<(), StorageError> {
+    pub fn set_last_cleanup_ts(&self, ts: u64) -> Result<()> {
         let tree = self.meta_tree()?;
         let value = serde_json::to_vec(&ts)?;
-        tree.insert(b"meta:last_cleanup", value)?;
+        tree.insert(META_LAST_CLEANUP, value)?;
         Ok(())
     }
 
     /// Get the timestamp of the last cleanup operation, if any.
-    pub fn get_last_cleanup_ts(&self) -> Result<Option<u64>, StorageError> {
+    pub fn get_last_cleanup_ts(&self) -> Result<Option<u64>> {
         let tree = self.meta_tree()?;
-        match tree.get(b"meta:last_cleanup")? {
-            Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
-            None => Ok(None),
-        }
+        self.get_metadata(&tree, META_LAST_CLEANUP, None)
     }
 
     /// Manually flush the database transactions to disk
-    pub fn flush(&self) -> Result<(), StorageError> {
+    pub fn flush(&self) -> Result<()> {
         self.db.flush()?;
         Ok(())
     }

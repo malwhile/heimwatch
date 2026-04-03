@@ -45,10 +45,9 @@ fn get_process_name_linux(pid: u32) -> Result<String, Box<dyn std::error::Error>
         // cmdline uses null bytes as separators; take the first argument
         if let Some(exe_path) = cmdline.split('\0').next()
             && !exe_path.is_empty()
-            && let Some(name) = Path::new(exe_path).file_name()
-            && let Some(name_str) = name.to_str()
+            && let Some(name) = extract_process_name(exe_path)
         {
-            return Ok(name_str.to_string());
+            return Ok(name);
         }
     }
 
@@ -72,18 +71,24 @@ fn get_process_name_macos(pid: u32) -> Result<String, Box<dyn std::error::Error>
     if output.status.success() {
         let name = String::from_utf8(output.stdout)?;
         let trimmed = name.trim();
-
-        // ps output may include the full path; extract just the basename
-        if let Some(base_name) = Path::new(trimmed).file_name()
-            && let Some(base_str) = base_name.to_str()
-        {
-            return Ok(base_str.to_string());
+        if let Some(process_name) = extract_process_name(trimmed) {
+            return Ok(process_name);
+        } else {
+            return Ok(trimmed);
         }
-
-        Ok(trimmed.to_string())
     } else {
         Err(format!("Process {} not found", pid).into())
     }
+}
+
+fn extract_process_name(path: &str) -> Option<String> {
+    if let Some(base) = Path::new(path).file_name()
+        && let Some(base_str) = base.to_str()
+    {
+        return Some(base_str.to_string());
+    }
+
+    None
 }
 
 #[cfg(test)]

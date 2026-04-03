@@ -1,46 +1,136 @@
 [workspace]
+# ============================================================================
+# Workspace Members (Main Crates)
+# ============================================================================
+# These are the primary crates that are built and tested as part of the
+# workspace on all platforms. Each handles a distinct responsibility.
 members = [
-    "crates/heimwatch-core",
-    "crates/heimwatch-collector",
-    "crates/heimwatch-storage",
-    "crates/heimwatch-web",
-    "crates/heimwatch-tui",
-    "crates/heimwatch-daemon",
+    "crates/heimwatch-core",       # Core types and traits
+    "crates/heimwatch-collector",  # OS-specific metric collection
+    "crates/heimwatch-storage",    # Time-series data persistence
+    "crates/heimwatch-web",        # Web dashboard server
+    "crates/heimwatch-tui",        # Terminal user interface
+    "crates/heimwatch-daemon",     # Main daemon service
 ]
+
+# ============================================================================
+# Excluded Crates (Linux-Only eBPF)
+# ============================================================================
+# eBPF is a Linux kernel feature and cannot compile on macOS/Windows.
+# These crates are excluded from the main workspace and built separately
+# via build.rs in heimwatch-collector (Linux only).
+# On non-Linux platforms, cargo skips these entirely.
+# See: crates/heimwatch-ebpf/build.rs, crates/heimwatch-ebpf-common/build.rs
 exclude = [
-    # eBPF crates are Linux-only (eBPF is a Linux kernel feature).
-    # They target bpf-unknown-unknown and require nightly Rust.
-    # Built separately via build.rs in heimwatch-collector on Linux only.
-    # On macOS/Windows, these crates are skipped entirely.
-    # See: crates/heimwatch-ebpf/build.rs, crates/heimwatch-ebpf-common/build.rs
-    "crates/heimwatch-ebpf-common",
-    "crates/heimwatch-ebpf",
+    "crates/heimwatch-ebpf-common",  # Shared eBPF types (Linux-only)
+    "crates/heimwatch-ebpf",         # eBPF kernel program (Linux-only)
 ]
-resolver = "2"
+
+resolver = "2"  # Use new resolver for faster, more accurate dependency resolution
+
+[workspace.package]
+# Shared package metadata for all workspace members
+version = "0.1.0"
+edition = "2024"  # Latest stable Rust edition with let-chains support
+license = "MIT"
+
+[workspace.dependencies]
+# ============================================================================
+# Internal Workspace Crates
+# ============================================================================
+# Each represents a functional module of the Heimwatch system.
+heimwatch-core = { path = "crates/heimwatch-core" }           # Shared types, traits, OS abstraction
+heimwatch-collector = { path = "crates/heimwatch-collector" } # Platform-specific metric collection
+heimwatch-storage = { path = "crates/heimwatch-storage" }     # Time-series persistence (sled)
+heimwatch-web = { path = "crates/heimwatch-web" }             # Web dashboard server (Axum)
+heimwatch-tui = { path = "crates/heimwatch-tui" }             # Terminal UI (Ratatui)
+heimwatch-daemon = { path = "crates/heimwatch-daemon" }       # Main daemon and service coordination
+
+# ============================================================================
+# Error Handling
+# ============================================================================
+anyhow = { version = "1.0" }       # Flexible error handling with context chains
+thiserror = { version = "1.0" }    # Derive macro for error types with thiserror
+
+# ============================================================================
+# Async Runtime & Concurrency
+# ============================================================================
+tokio = { version = "1.41", features = ["full"] } # Async runtime with full feature set
+
+# ============================================================================
+# CLI & Configuration
+# ============================================================================
+clap = { version = "4.5", features = ["derive"] } # Argument parsing with derive macros
+
+# ============================================================================
+# Serialization & Data Formats
+# ============================================================================
+serde = { version = "1.0", features = ["derive"] } # Serialization framework with derives
+serde_json = { version = "1.0" }                   # JSON support
+chrono = { version = "0.4", features = ["serde"] } # Date/time handling with serde
+
+# ============================================================================
+# Logging & Observability
+# ============================================================================
+log = { version = "0.4" }          # Logging facade (used globally across crates)
+env_logger = { version = "0.11" }  # env_logger implementation for log facade
+strum_macros = { version = "0.28" }    # Displays for enums
+
+# ============================================================================
+# Storage & Persistence
+# ============================================================================
+sled = { version = "0.34" } # Embedded key-value database for metrics
+
+# ============================================================================
+# Linux/eBPF-Specific Dependencies
+# ============================================================================
+# These are conditionally compiled and only active on Linux.
+# See: crates/heimwatch-ebpf/build.rs and crates/heimwatch-collector/build.rs
+aya = { version = "0.13", features = ["async_tokio"] } # eBPF framework for kernel-space monitoring
+aya-log = { version = "0.2" }                          # Logging support in eBPF programs
+aya-build = { version = "0.1" }                        # Build-time eBPF compilation helpers
+aya-ebpf = { version = "0.1" }                         # eBPF program runtime library
+aya-log-ebpf = { version = "0.1" }                     # In-kernel logging for eBPF
+
+# ============================================================================
+# Development & Testing
+# ============================================================================
+tempfile = { version = "3.8" } # Temporary file/directory creation for tests
 
 [package]
 name = "heimwatch"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "The All-Seeing Eye of Your System"
 
-# Default features for Linux/Wayland
+# ============================================================================
+# Platform Features
+# ============================================================================
+# Currently used for documentation and future platform-specific compilation.
+# Automatically selected based on the target platform (see .cargo/config.toml).
 [features]
-default = ["linux"]
-linux = []
-macos = []
-windows = []
-bsd = []
+default = ["linux"]  # Default feature set for Linux (primary development target)
+linux = []           # Linux with eBPF support
+macos = []           # macOS (eBPF not available; uses stubs)
+windows = []         # Windows (eBPF not available; uses stubs)
+bsd = []             # BSD family (future target)
 
 [dependencies]
-# Main binary dependencies (aggregates the workspace crates)
-heimwatch-core = { path = "crates/heimwatch-core" }
-heimwatch-collector = { path = "crates/heimwatch-collector" }
-heimwatch-storage = { path = "crates/heimwatch-storage" }
-heimwatch-web = { path = "crates/heimwatch-web" }
-heimwatch-tui = { path = "crates/heimwatch-tui" }
-heimwatch-daemon = { path = "crates/heimwatch-daemon" }
+# ============================================================================
+# Root Binary Dependencies
+# ============================================================================
+# The root package aggregates all workspace crates and provides the main CLI
+# interface. Most configuration and orchestration happens here.
 
-tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
+# --- Workspace Crates ---
+heimwatch-core.workspace = true       # Shared types and traits
+heimwatch-collector.workspace = true  # Metric collectors (platform-specific)
+heimwatch-storage.workspace = true    # Storage layer
+heimwatch-web.workspace = true        # Web server
+heimwatch-tui.workspace = true        # Terminal UI
+heimwatch-daemon.workspace = true     # Main daemon service
+
+# --- Runtime & CLI ---
+tokio.workspace = true  # Async runtime
+clap.workspace = true   # CLI argument parsing
