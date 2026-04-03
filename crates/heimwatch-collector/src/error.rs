@@ -18,6 +18,7 @@ pub enum CollectorError {
     MapNotFound(String),
 
     /// Underlying eBPF (aya) error.
+    #[cfg(target_os = "linux")]
     #[error("eBPF error: {0}")]
     EbpfError(String),
 
@@ -30,6 +31,7 @@ pub enum CollectorError {
     SystemTimeError,
 }
 
+#[cfg(target_os = "linux")]
 impl From<aya::EbpfError> for CollectorError {
     fn from(err: aya::EbpfError) -> Self {
         CollectorError::EbpfError(err.to_string())
