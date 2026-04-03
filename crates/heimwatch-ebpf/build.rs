@@ -17,7 +17,6 @@ fn main() {
         panic!("eBPF build only supported on Linux");
     }
 
-    // Linux build: currently a stub
-    // TODO: Implement proper eBPF cross-compilation when needed
-    println!("cargo:warning=heimwatch-ebpf is currently a stub; full eBPF build TBD");
+    // Linux build: eBPF program is compiled by heimwatch-collector's build.rs
+    // This crate provides the source; the actual cross-compilation happens upstream
 }

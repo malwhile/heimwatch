@@ -1,38 +1,10 @@
+mod common;
+
 use std::sync::Arc;
-use tempfile::TempDir;
 
-use heimwatch_storage::{
-    CpuData, MetricPayload, MetricRecord, MetricType, NetworkData, StorageError, StorageLayer,
-};
-
-fn create_test_db() -> (StorageLayer, TempDir) {
-    let tmpdir = TempDir::new().unwrap();
-    let db = StorageLayer::open(tmpdir.path().to_str().unwrap()).unwrap();
-    (db, tmpdir)
-}
-
-fn make_cpu_record(app_name: &str, timestamp: u64, usage_percent: f32) -> MetricRecord {
-    MetricRecord {
-        app_name: app_name.to_string(),
-        timestamp,
-        payload: MetricPayload::Cpu(CpuData {
-            usage_percent,
-            core_count: 4,
-        }),
-    }
-}
-
-fn make_network_record(app_name: &str, timestamp: u64, tx: u64, rx: u64) -> MetricRecord {
-    MetricRecord {
-        app_name: app_name.to_string(),
-        timestamp,
-        payload: MetricPayload::Net(NetworkData {
-            tx_bytes: tx,
-            rx_bytes: rx,
-            connections: 1,
-        }),
-    }
-}
+use common::*;
+use heimwatch_core::current_unix_timestamp;
+use heimwatch_storage::{CpuData, MetricPayload, MetricType, StorageError};
 
 #[test]
 fn test_insert_and_read_back() {
@@ -145,10 +117,7 @@ fn test_top_apps_by_network() {
 fn test_cleanup_old_data() {
     let (db, _tmpdir) = create_test_db();
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = current_unix_timestamp().unwrap();
 
     // Insert a recent record (now)
     let recent = make_cpu_record("app", now, 10.0);
@@ -253,5 +222,10 @@ fn test_concurrent_inserts() {
 fn test_aggregated_cpu_not_found() {
     let (db, _tmpdir) = create_test_db();
     let result = db.get_aggregated_cpu("nonexistent", 0, 1000);
-    assert!(matches!(result, Err(StorageError::NotFound)));
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<StorageError>(),
+        Some(StorageError::NotFound)
+    ));
 }

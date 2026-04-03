@@ -17,6 +17,18 @@ pub enum MetricType {
     Gpu,
 }
 
+/// All metric types in order. Used for iterating across all metric types.
+/// If a new metric type is added to the enum, add it here as well.
+pub const ALL_METRIC_TYPES: &[MetricType] = &[
+    MetricType::Net,
+    MetricType::Pwr,
+    MetricType::Foc,
+    MetricType::Cpu,
+    MetricType::Mem,
+    MetricType::Dsk,
+    MetricType::Gpu,
+];
+
 impl MetricType {
     /// Returns the 3-character prefix used as the key prefix in sled.
     pub fn prefix(&self) -> &'static str {

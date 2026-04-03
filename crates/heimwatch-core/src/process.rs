@@ -1,4 +1,3 @@
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 
 /// Retrieves the process/app name from a given PID.
@@ -37,24 +36,21 @@ pub fn get_process_name(_pid: u32) -> Result<String, Box<dyn std::error::Error>>
 
 #[cfg(target_os = "linux")]
 fn get_process_name_linux(pid: u32) -> Result<String, Box<dyn std::error::Error>> {
-    use std::fs;
-
     // Try /proc/[PID]/cmdline first (more reliable for full paths)
     let cmdline_path = format!("/proc/{}/cmdline", pid);
-    if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
+    if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
         // cmdline uses null bytes as separators; take the first argument
         if let Some(exe_path) = cmdline.split('\0').next()
             && !exe_path.is_empty()
-            && let Some(name) = Path::new(exe_path).file_name()
-            && let Some(name_str) = name.to_str()
+            && let Some(name) = extract_process_name(exe_path)
         {
-            return Ok(name_str.to_string());
+            return Ok(name);
         }
     }
 
     // Fallback to /proc/[PID]/comm (limited to 15 chars but always available)
     let comm_path = format!("/proc/{}/comm", pid);
-    let comm = fs::read_to_string(&comm_path)?;
+    let comm = std::fs::read_to_string(&comm_path)?;
     Ok(comm.trim().to_string())
 }
 
@@ -72,18 +68,25 @@ fn get_process_name_macos(pid: u32) -> Result<String, Box<dyn std::error::Error>
     if output.status.success() {
         let name = String::from_utf8(output.stdout)?;
         let trimmed = name.trim();
-
-        // ps output may include the full path; extract just the basename
-        if let Some(base_name) = Path::new(trimmed).file_name()
-            && let Some(base_str) = base_name.to_str()
-        {
-            return Ok(base_str.to_string());
+        if let Some(process_name) = extract_process_name(trimmed) {
+            Ok(process_name)
+        } else {
+            Ok(trimmed.to_string())
         }
-
-        Ok(trimmed.to_string())
     } else {
         Err(format!("Process {} not found", pid).into())
     }
+}
+
+#[allow(dead_code)]
+fn extract_process_name(path: &str) -> Option<String> {
+    if let Some(base) = Path::new(path).file_name()
+        && let Some(base_str) = base.to_str()
+    {
+        return Some(base_str.to_string());
+    }
+
+    None
 }
 
 #[cfg(test)]
