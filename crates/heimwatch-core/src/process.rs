@@ -72,9 +72,9 @@ fn get_process_name_macos(pid: u32) -> Result<String, Box<dyn std::error::Error>
         let name = String::from_utf8(output.stdout)?;
         let trimmed = name.trim();
         if let Some(process_name) = extract_process_name(trimmed) {
-            return Ok(process_name);
+            Ok(process_name)
         } else {
-            return Ok(trimmed.to_string());
+            Ok(trimmed.to_string())
         }
     } else {
         Err(format!("Process {} not found", pid).into())
