@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 
 /// Retrieves the process/app name from a given PID.
@@ -17,6 +18,7 @@ use std::path::Path;
 /// let name = get_process_name(1234)?;
 /// assert_eq!(name, "zen");
 /// ```
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn get_process_name(pid: u32) -> Result<String, Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     {
@@ -26,10 +28,11 @@ pub fn get_process_name(pid: u32) -> Result<String, Box<dyn std::error::Error>> 
     {
         get_process_name_macos(pid)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Err("Process name lookup not implemented for this platform".into())
-    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn get_process_name(_pid: u32) -> Result<String, Box<dyn std::error::Error>> {
+    Err("Process name lookup not implemented for this platform".into())
 }
 
 #[cfg(target_os = "linux")]
@@ -40,14 +43,12 @@ fn get_process_name_linux(pid: u32) -> Result<String, Box<dyn std::error::Error>
     let cmdline_path = format!("/proc/{}/cmdline", pid);
     if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
         // cmdline uses null bytes as separators; take the first argument
-        if let Some(exe_path) = cmdline.split('\0').next() {
-            if !exe_path.is_empty() {
-                if let Some(name) = Path::new(exe_path).file_name() {
-                    if let Some(name_str) = name.to_str() {
-                        return Ok(name_str.to_string());
-                    }
-                }
-            }
+        if let Some(exe_path) = cmdline.split('\0').next()
+            && !exe_path.is_empty()
+            && let Some(name) = Path::new(exe_path).file_name()
+            && let Some(name_str) = name.to_str()
+        {
+            return Ok(name_str.to_string());
         }
     }
 
@@ -73,10 +74,10 @@ fn get_process_name_macos(pid: u32) -> Result<String, Box<dyn std::error::Error>
         let trimmed = name.trim();
 
         // ps output may include the full path; extract just the basename
-        if let Some(base_name) = Path::new(trimmed).file_name() {
-            if let Some(base_str) = base_name.to_str() {
-                return Ok(base_str.to_string());
-            }
+        if let Some(base_name) = Path::new(trimmed).file_name()
+            && let Some(base_str) = base_name.to_str()
+        {
+            return Ok(base_str.to_string());
         }
 
         Ok(trimmed.to_string())

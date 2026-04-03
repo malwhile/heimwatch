@@ -4,3 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+heimwatch-core = { path = "../heimwatch-core" }
+tokio = { version = "1", features = ["full"] }
+thiserror = "1"
+log = "0.4"
+
+# Linux-only dependencies (eBPF network monitoring)
+[target.'cfg(target_os = "linux")'.dependencies]
+heimwatch-ebpf-common = { path = "../heimwatch-ebpf-common" }
+aya = { version = "0.13", features = ["async_tokio"] }
+aya-log = "0.2"
+
+[build-dependencies]
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+aya-build = "0.1"

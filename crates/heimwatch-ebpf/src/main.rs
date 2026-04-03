@@ -24,6 +24,8 @@ static NETWORK_STATS: HashMap<u32, PidNetStats> =
     HashMap::with_max_entries(10_240, 0);
 
 /// Attached to tcp_sendmsg. Size is passed directly as arg 2.
+/// 
+/// // arg(2) contains the send size; args 0-1 are kernel struct pointers (inaccessible from BPF)
 ///
 /// tcp_sendmsg signature:
 ///   int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
@@ -42,6 +44,7 @@ pub fn trace_sendmsg(ctx: ProbeContext) -> u32 {
 fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
     // tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
     // arg(2) = size_t size (the actual byte count to send)
+    // bpf_get_current_pid_tgid() returns {tgid (upper 32), pid (lower 32)}. We use tgid (process) not tid (thread).
     let size: u64 = ctx.arg(2).unwrap_or(0);
 
     // Get current PID (upper 32 bits of pid_tgid)
@@ -85,6 +88,8 @@ pub fn trace_recvmsg(ctx: RetProbeContext) -> u32 {
 fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
     // For a kretprobe, ctx.ret() gives us the return value of the probed function
     // tcp_recvmsg returns the number of bytes received (positive) or an error code (negative)
+
+    // bytes_received <= 0: errors (negative) and empty reads (0). Skip to avoid false counts; partial reads already counted in tcp_sendmsg.
     let bytes_received: i64 = ctx.ret().unwrap_or(0);
 
     // Only count positive bytes; ignore errors and 0-byte reads
