@@ -20,7 +20,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -29,6 +29,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Install nightly toolchain (Linux only, for eBPF)
+        if: runner.os == 'Linux'
+        run: rustup toolchain install nightly --component rust-src
+
+      - name: Install bpf-linker (Linux only)
+        if: runner.os == 'Linux'
+        run: cargo install bpf-linker
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
