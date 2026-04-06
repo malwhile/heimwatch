@@ -49,7 +49,7 @@ build-release:
 	cargo build --release
 
 build-ebpf:
-	cargo +nightly check --manifest-path crates/heimwatch-ebpf/Cargo.toml
+	cargo +nightly check --manifest-path bpf/heimwatch-ebpf/Cargo.toml -Z build-std=core --target bpfel-unknown-none
 
 build-core:
 	cargo build -p heimwatch-core
@@ -70,7 +70,7 @@ build-daemon:
 	cargo build -p heimwatch-daemon
 
 ebpf-standalone:
-	cargo +nightly build --target bpf-unknown-unknown --manifest-path crates/heimwatch-ebpf/Cargo.toml
+	cargo +nightly build --target bpfel-unknown-none --manifest-path bpf/heimwatch-ebpf/Cargo.toml -Z build-std=core
 
 # Testing targets
 test: test-parallel
@@ -89,9 +89,6 @@ test-all:
 
 check:
 	cargo check
-
-ebpf-check:
-	cargo +nightly check --manifest-path crates/heimwatch-ebpf/Cargo.toml
 
 # Code quality targets
 fmt:
@@ -116,8 +113,8 @@ install-nextest:
 # Cleanup
 clean:
 	cargo clean
-	rm -rf crates/heimwatch-ebpf-common/target
-	rm -rf crates/heimwatch-ebpf/target
+	rm -rf bpf/heimwatch-ebpf-common/target
+	rm -rf bpf/heimwatch-ebpf/target
 
 # Convenience targets
 all: fmt lint test build-release

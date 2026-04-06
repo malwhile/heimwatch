@@ -8,9 +8,27 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use aya::Ebpf;
+use aya::maps::HashMap as AyaHashMap;
 use aya::programs::KProbe;
-use heimwatch_core::{MetricPayload, MetricRecord, NetworkData, current_unix_timestamp};
+use heimwatch_core::{
+    MetricPayload, MetricRecord, NetworkData, current_unix_timestamp, process::get_process_name,
+};
 use heimwatch_ebpf_common::PidNetStats;
+
+/// Local Pod-compatible mirror of PidNetStats.
+///
+/// The orphan rule prevents implementing `aya::Pod` for `PidNetStats` in this crate
+/// (since both `aya` and `heimwatch-ebpf-common` are external). This mirror type has
+/// identical layout (both are `#[repr(C)]` with `u64, u64`) and can be safely converted.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LocalPidNetStats {
+    tx_bytes: u64,
+    rx_bytes: u64,
+}
+
+// Safety: repr(C), all u64 fields are valid for all bit patterns, no padding.
+unsafe impl aya::Pod for LocalPidNetStats {}
 
 /// Embedded BPF object, compiled by build.rs at build time.
 static BPF_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/heimwatch-ebpf"));
@@ -64,20 +82,38 @@ impl NetworkCollector {
     pub fn collect_network(&mut self) -> Result<Vec<MetricRecord>> {
         let timestamp = current_unix_timestamp()?;
 
-        // Get the NETWORK_STATS map from the BPF program
-        // Note: For now, we read it as raw bytes and parse manually
-        // TODO: Use typed HashMap once we can resolve the orphan rule properly
-        let _map_ref = self
+        // Get the NETWORK_STATS map from the BPF program and iterate it
+        let map_ref = self
             .bpf
-            .map("NETWORK_STATS")
+            .map_mut("NETWORK_STATS")
             .ok_or_else(|| CollectorError::MapNotFound("NETWORK_STATS".to_string()))?;
 
-        // Aggregate current totals by app name (multiple PIDs → same app)
-        let current_by_app: HashMap<String, PidNetStats> = HashMap::new();
+        let stats_map: AyaHashMap<_, u32, LocalPidNetStats> = AyaHashMap::try_from(map_ref)?;
 
-        // For now, create an empty map (placeholder)
-        // In a real implementation, we would iterate the BPF map here
-        // This is a TODO until we resolve the typed map access
+        // Aggregate current totals by app name (multiple PIDs → same app)
+        let mut current_by_app: HashMap<String, PidNetStats> = HashMap::new();
+
+        for entry in stats_map.iter() {
+            let (pid, local_stats) = entry?;
+
+            // Resolve PID to app name; fall back to "pid:XXXX" if not found
+            let app_name = match get_process_name(pid) {
+                Ok(name) => name,
+                Err(error) => {
+                    log::error!(
+                        "Failed to get the process name for pid {}: error {}",
+                        pid,
+                        error
+                    );
+                    format!("pid:{}", pid)
+                }
+            };
+
+            // Aggregate: if multiple PIDs belong to the same app, sum their traffic
+            let entry = current_by_app.entry(app_name).or_default();
+            entry.tx_bytes = entry.tx_bytes.saturating_add(local_stats.tx_bytes);
+            entry.rx_bytes = entry.rx_bytes.saturating_add(local_stats.rx_bytes);
+        }
 
         // Calculate deltas
         let mut records = Vec::new();

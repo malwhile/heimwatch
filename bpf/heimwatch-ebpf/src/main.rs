@@ -20,11 +20,10 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 /// On larger systems, oldest/inactive PIDs are silently dropped.
 /// User-space collector handles missing PIDs gracefully.
 #[map]
-static NETWORK_STATS: HashMap<u32, PidNetStats> =
-    HashMap::with_max_entries(10_240, 0);
+static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(10_240, 0);
 
 /// Attached to tcp_sendmsg. Size is passed directly as arg 2.
-/// 
+///
 /// // arg(2) contains the send size; args 0-1 are kernel struct pointers (inaccessible from BPF)
 ///
 /// tcp_sendmsg signature:
@@ -103,9 +102,7 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
     // Update or insert the stats for this PID
     let stats = NETWORK_STATS.get_ptr_mut(&pid);
     match stats {
-        Some(s) => {
-            unsafe { (*s).rx_bytes = (*s).rx_bytes.saturating_add(bytes_received as u64) }
-        }
+        Some(s) => unsafe { (*s).rx_bytes = (*s).rx_bytes.saturating_add(bytes_received as u64) },
         None => {
             let new_stats = PidNetStats {
                 tx_bytes: 0,
