@@ -8,12 +8,13 @@ aya-ebpf = { version = "0.1" }
 aya-log-ebpf = { version = "0.1" }
 heimwatch-ebpf-common = { path = "../heimwatch-ebpf-common" }
 
-[[bin]]
-name = "heimwatch-ebpf"
-path = "src/main.rs"
-
+# eBPF panic profiles (no_std environment)
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+[[bin]]
+name = "heimwatch-ebpf"
+path = "src/main.rs"

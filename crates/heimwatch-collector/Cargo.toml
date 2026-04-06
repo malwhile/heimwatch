@@ -12,7 +12,7 @@ log.workspace = true
 
 # Linux-only dependencies (eBPF network monitoring)
 [target.'cfg(target_os = "linux")'.dependencies]
-heimwatch-ebpf-common = { path = "../heimwatch-ebpf-common" }
+heimwatch-ebpf-common = { path = "../../bpf/heimwatch-ebpf-common" }
 aya.workspace = true
 aya-log.workspace = true
 

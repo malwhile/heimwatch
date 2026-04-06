@@ -17,13 +17,11 @@ members = [
 # Excluded Crates (Linux-Only eBPF)
 # ============================================================================
 # eBPF is a Linux kernel feature and cannot compile on macOS/Windows.
-# These crates are excluded from the main workspace and built separately
-# via build.rs in heimwatch-collector (Linux only).
-# On non-Linux platforms, cargo skips these entirely.
-# See: crates/heimwatch-ebpf/build.rs, crates/heimwatch-ebpf-common/build.rs
+# These crates are compiled separately via build.rs at the root and are
+# NOT part of the main workspace. This prevents compilation errors on
+# non-Linux platforms while still enabling eBPF kernel monitoring on Linux.
 exclude = [
-    "crates/heimwatch-ebpf-common",  # Shared eBPF types (Linux-only)
-    "crates/heimwatch-ebpf",         # eBPF kernel program (Linux-only)
+    "bpf",  # Linux-only eBPF kernel programs and shared types
 ]
 
 resolver = "2"  # Use new resolver for faster, more accurate dependency resolution
