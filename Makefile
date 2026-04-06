@@ -26,7 +26,6 @@ help:
 	@echo "  make fmt                - Format all code"
 	@echo "  make fmt-check          - Check code formatting"
 	@echo "  make lint               - Run clippy linter"
-	@echo "  make ebpf-check         - Check eBPF code compilation"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make install-tools      - Install required build tools (nightly, bpf-linker)"
@@ -129,5 +128,5 @@ dev-setup: install-tools install-nextest check fmt-check lint test
 ci: fmt-check lint test build-ebpf build
 	@echo "✓ CI checks passed!"
 
-code-quality: fmt lint check ebpf-check
+code-quality: fmt lint check build-ebpf
 	@echo "✓ Quality checks passed!"
