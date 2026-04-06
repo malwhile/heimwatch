@@ -498,6 +498,7 @@ dependencies = [
  "heimwatch-core",
  "heimwatch-storage",
  "log",
+ "serde_json",
  "strum_macros",
  "tokio",
 ]
