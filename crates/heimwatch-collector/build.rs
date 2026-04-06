@@ -1,7 +1,3 @@
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-
 fn main() {
     // Only build eBPF on Linux targets
     // macOS and Windows don't use eBPF for network monitoring
@@ -12,7 +8,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn build_ebpf() {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
-    let out_path = PathBuf::from(&out_dir);
+    let out_path = std::path::PathBuf::from(&out_dir);
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
 
     println!("cargo:rerun-if-changed=../bpf/heimwatch-ebpf/src/");
@@ -26,7 +22,10 @@ fn build_ebpf() {
     // The manifest path is relative to the workspace root
     // manifest_dir is /path/to/heimwatch/crates/heimwatch-collector
     // We want /path/to/heimwatch/bpf/heimwatch-ebpf/Cargo.toml
-    let crates_dir = PathBuf::from(&manifest_dir).parent().unwrap().to_path_buf();
+    let crates_dir = std::path::PathBuf::from(&manifest_dir)
+        .parent()
+        .unwrap()
+        .to_path_buf();
     let workspace_root = crates_dir.parent().unwrap().to_path_buf();
     let ebpf_manifest = workspace_root.join("bpf/heimwatch-ebpf/Cargo.toml");
 
@@ -34,7 +33,7 @@ fn build_ebpf() {
     let rustflags =
         "--cfg=bpf_target_arch=\"x86_64\"\x1f-Cdebuginfo=2\x1f-Clink-arg=--btf".to_string();
 
-    let mut cmd = Command::new("rustup");
+    let mut cmd = std::process::Command::new("rustup");
     cmd.args(["run", "nightly", "cargo", "build"])
         .args(["--manifest-path", ebpf_manifest.to_str().unwrap()])
         .args(["-Z", "build-std=core"])
@@ -60,11 +59,11 @@ fn build_ebpf() {
     if binary_path.exists() {
         let dst_path = out_path.join("heimwatch-ebpf");
         // Remove existing file/directory if it exists
-        let _ = fs::remove_dir_all(&dst_path);
-        let _ = fs::remove_file(&dst_path);
+        let _ = std::fs::remove_dir_all(&dst_path);
+        let _ = std::fs::remove_file(&dst_path);
 
         // Copy the binary
-        if let Err(e) = fs::copy(&binary_path, &dst_path) {
+        if let Err(e) = std::fs::copy(&binary_path, &dst_path) {
             eprintln!("Warning: Failed to copy eBPF binary: {}", e);
             panic!("Failed to finalize eBPF build");
         }
