@@ -20,8 +20,7 @@ pub async fn run_snapshot(window_secs: u64, format: &str) -> Result<()> {
     log::info!("Attaching eBPF probes, observing for {}s...", window_secs);
 
     // PlatformCollector::new() blocks on eBPF FD setup
-    let collector = tokio::task::spawn_blocking(PlatformCollector::new)
-        .await??;
+    let collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
     let collector = Arc::new(Mutex::new(collector));
 
     // Wait for traffic to accumulate in the BPF map
