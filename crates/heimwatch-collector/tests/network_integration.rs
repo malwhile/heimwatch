@@ -83,6 +83,7 @@ fn test_multithreaded_app_aggregation() {
             PidNetStats {
                 tx_bytes: expected_per_thread * thread_count as u64,
                 rx_bytes: expected_per_thread * thread_count as u64,
+                comm: *TEST_COMM_NAME,
             },
         );
         map
@@ -133,6 +134,7 @@ fn test_saturation_helper(transfer_size: u64, size_label: &str) {
     let mut stats = PidNetStats {
         tx_bytes: u64::MAX - (transfer_size / 2), // Already near max
         rx_bytes: 0,
+        comm: *TEST_COMM_NAME,
     };
 
     // First transfer: should saturate at u64::MAX
@@ -177,6 +179,10 @@ fn test_saturation_helper(transfer_size: u64, size_label: &str) {
 /// Scenario: Spawn 10,240+ processes to fill the NETWORK_STATS map.
 /// Expected: BPF logs a warning (to kernel trace buffer) for PIDs that can't be inserted,
 /// but continues tracking other PIDs. No panic, no silent data loss.
+
+#[cfg(test)]
+const TEST_COMM_NAME: &[u8; 16] = b"0123456789abcdef";
+
 #[test]
 #[ignore] // Requires CAP_BPF/root and ability to spawn 10K processes
 fn test_map_saturation_graceful_degradation() {
@@ -190,6 +196,7 @@ fn test_map_saturation_graceful_degradation() {
             PidNetStats {
                 tx_bytes: 100,
                 rx_bytes: 100,
+                comm: *TEST_COMM_NAME,
             },
         );
     }
@@ -246,10 +253,12 @@ fn test_pid_reuse_helper(prev_tx: u64, prev_rx: u64, curr_tx: u64, curr_rx: u64)
     let prev_stats = PidNetStats {
         tx_bytes: prev_tx,
         rx_bytes: prev_rx,
+        comm: *TEST_COMM_NAME,
     };
     let curr_stats = PidNetStats {
         tx_bytes: curr_tx,
         rx_bytes: curr_rx,
+        comm: *TEST_COMM_NAME,
     };
 
     // Apply delta calculation
@@ -321,10 +330,12 @@ fn test_normal_delta_helper(
     let prev_stats = PidNetStats {
         tx_bytes: prev_tx,
         rx_bytes: prev_rx,
+        comm: *TEST_COMM_NAME,
     };
     let curr_stats = PidNetStats {
         tx_bytes: curr_tx,
         rx_bytes: curr_rx,
+        comm: *TEST_COMM_NAME,
     };
 
     // Apply delta calculation
@@ -365,6 +376,7 @@ fn test_multi_pid_aggregation_by_app_name() {
             PidNetStats {
                 tx_bytes: 100,
                 rx_bytes: 200,
+                comm: *TEST_COMM_NAME,
             },
         );
         map.insert(
@@ -372,6 +384,7 @@ fn test_multi_pid_aggregation_by_app_name() {
             PidNetStats {
                 tx_bytes: 150,
                 rx_bytes: 250,
+                comm: *TEST_COMM_NAME,
             },
         );
         map.insert(
@@ -379,6 +392,7 @@ fn test_multi_pid_aggregation_by_app_name() {
             PidNetStats {
                 tx_bytes: 50,
                 rx_bytes: 100,
+                comm: *TEST_COMM_NAME,
             },
         );
         map
@@ -425,6 +439,7 @@ fn test_cross_app_aggregation_boundary() {
             PidNetStats {
                 tx_bytes: 100,
                 rx_bytes: 200,
+                comm: *TEST_COMM_NAME,
             },
         );
         map.insert(
@@ -432,6 +447,7 @@ fn test_cross_app_aggregation_boundary() {
             PidNetStats {
                 tx_bytes: 150,
                 rx_bytes: 250,
+                comm: *TEST_COMM_NAME,
             },
         );
         // Firefox processes
@@ -440,6 +456,7 @@ fn test_cross_app_aggregation_boundary() {
             PidNetStats {
                 tx_bytes: 300,
                 rx_bytes: 400,
+                comm: *TEST_COMM_NAME,
             },
         );
         map.insert(
@@ -447,6 +464,7 @@ fn test_cross_app_aggregation_boundary() {
             PidNetStats {
                 tx_bytes: 200,
                 rx_bytes: 350,
+                comm: *TEST_COMM_NAME,
             },
         );
         // curl process
@@ -455,6 +473,7 @@ fn test_cross_app_aggregation_boundary() {
             PidNetStats {
                 tx_bytes: 50,
                 rx_bytes: 100,
+                comm: *TEST_COMM_NAME,
             },
         );
         map
@@ -517,6 +536,7 @@ fn test_cross_app_aggregation_with_saturation() {
             PidNetStats {
                 tx_bytes: u64::MAX - 500,
                 rx_bytes: u64::MAX - 1000,
+                comm: *TEST_COMM_NAME,
             },
         );
         map.insert(
@@ -524,6 +544,7 @@ fn test_cross_app_aggregation_with_saturation() {
             PidNetStats {
                 tx_bytes: 1000, // (MAX - 500) + 1000 = MAX + 500, saturates to MAX
                 rx_bytes: 1500, // (MAX - 1000) + 1500 = MAX + 500, saturates to MAX
+                comm: *TEST_COMM_NAME,
             },
         );
         // Firefox: smaller traffic
@@ -532,6 +553,7 @@ fn test_cross_app_aggregation_with_saturation() {
             PidNetStats {
                 tx_bytes: 100,
                 rx_bytes: 200,
+                comm: *TEST_COMM_NAME,
             },
         );
         map
@@ -595,6 +617,7 @@ fn test_missing_pid_handling() {
             PidNetStats {
                 tx_bytes: 200,
                 rx_bytes: 300,
+                comm: *TEST_COMM_NAME,
             },
         );
         // Exited process (no /proc entry)
@@ -603,6 +626,7 @@ fn test_missing_pid_handling() {
             PidNetStats {
                 tx_bytes: 500,
                 rx_bytes: 1000,
+                comm: *TEST_COMM_NAME,
             },
         );
         // Another active process
@@ -611,6 +635,7 @@ fn test_missing_pid_handling() {
             PidNetStats {
                 tx_bytes: 300,
                 rx_bytes: 400,
+                comm: *TEST_COMM_NAME,
             },
         );
         map
@@ -654,10 +679,12 @@ fn test_zero_traffic_no_record_emitted() {
     let current = PidNetStats {
         tx_bytes: 100,
         rx_bytes: 200,
+        comm: *TEST_COMM_NAME,
     };
     let prev = PidNetStats {
         tx_bytes: 100,
         rx_bytes: 200,
+        comm: *TEST_COMM_NAME,
     };
 
     let (tx_delta, rx_delta, should_emit) = test_delta_params(current, prev);
