@@ -7,6 +7,7 @@ use aya_ebpf::{
     maps::HashMap,
     programs::{ProbeContext, RetProbeContext},
 };
+use aya_log_ebpf::warn;
 use heimwatch_ebpf_common::PidNetStats;
 
 #[panic_handler]
@@ -62,10 +63,10 @@ fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
                 comm,
             };
             // Attempt to insert; map may be full if many processes are running.
-            // Log to kernel trace buffer if insertion fails (without format args due to eBPF constraints).
-            let _ = NETWORK_STATS.insert(&pid, &new_stats, 0).is_err();
-            // Note: aya_log_ebpf warn! macro with format args doesn't compile on eBPF target
-            // due to LLVM incompatibilities with core::fmt on bpfel-unknown-none target
+            // Log to kernel trace buffer if insertion fails.
+            if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
+                warn!(ctx, "NETWORK_STATS map full");
+            }
         }
     }
 
@@ -116,10 +117,10 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
                 comm,
             };
             // Attempt to insert; map may be full if many processes are running.
-            // Log to kernel trace buffer if insertion fails (without format args due to eBPF constraints).
-            let _ = NETWORK_STATS.insert(&pid, &new_stats, 0).is_err();
-            // Note: aya_log_ebpf warn! macro with format args doesn't compile on eBPF target
-            // due to LLVM incompatibilities with core::fmt on bpfel-unknown-none target
+            // Log to kernel trace buffer if insertion fails.
+            if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
+                warn!(ctx, "NETWORK_STATS map full");
+            }
         }
     }
 

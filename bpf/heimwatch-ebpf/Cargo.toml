@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 aya-ebpf = { version = "0.1" }
+aya-log-ebpf = { version = "0.1" }
 heimwatch-ebpf-common = { path = "../heimwatch-ebpf-common" }
 
 # eBPF panic profiles (no_std environment)
