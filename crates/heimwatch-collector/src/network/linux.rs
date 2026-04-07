@@ -103,7 +103,8 @@ impl NetworkCollector {
             // 1. Try /proc lookup first (always current for running processes, detects PID reuse)
             // 2. Fall back to kernel-captured comm (works even after process exits, captures at first packet)
             // 3. Fall back to "pid:XXXX"
-            let app_name = get_process_name(pid).ok()
+            let app_name = get_process_name(pid)
+                .ok()
                 .or_else(|| comm_to_string(&local_stats.comm))
                 .unwrap_or_else(|| format!("pid:{}", pid));
 
