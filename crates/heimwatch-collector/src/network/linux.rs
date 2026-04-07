@@ -100,11 +100,11 @@ impl NetworkCollector {
             let (pid, local_stats) = entry?;
 
             // Resolve app name from multiple sources (in priority order):
-            // 1. Try comm field captured in kernel-space (works even after process exits)
-            // 2. Try /proc lookup (works if process is still running)
+            // 1. Try /proc lookup first (always current for running processes, detects PID reuse)
+            // 2. Fall back to kernel-captured comm (works even after process exits, captures at first packet)
             // 3. Fall back to "pid:XXXX"
-            let app_name = comm_to_string(&local_stats.comm)
-                .or_else(|| get_process_name(pid).ok())
+            let app_name = get_process_name(pid).ok()
+                .or_else(|| comm_to_string(&local_stats.comm))
                 .unwrap_or_else(|| format!("pid:{}", pid));
 
             // Aggregate: if multiple PIDs belong to the same app, sum their traffic
