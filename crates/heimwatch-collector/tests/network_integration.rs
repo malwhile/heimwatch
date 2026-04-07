@@ -179,7 +179,6 @@ fn test_saturation_helper(transfer_size: u64, size_label: &str) {
 /// Scenario: Spawn 10,240+ processes to fill the NETWORK_STATS map.
 /// Expected: BPF logs a warning (to kernel trace buffer) for PIDs that can't be inserted,
 /// but continues tracking other PIDs. No panic, no silent data loss.
-
 #[cfg(test)]
 const TEST_COMM_NAME: &[u8; 16] = b"0123456789abcdef";
 
