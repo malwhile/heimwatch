@@ -19,15 +19,16 @@ use heimwatch_ebpf_common::PidNetStats;
 ///
 /// The orphan rule prevents implementing `aya::Pod` for `PidNetStats` in this crate
 /// (since both `aya` and `heimwatch-ebpf-common` are external). This mirror type has
-/// identical layout (both are `#[repr(C)]` with `u64, u64`) and can be safely converted.
+/// identical layout (both are `#[repr(C)]`) and can be safely converted.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct LocalPidNetStats {
     tx_bytes: u64,
     rx_bytes: u64,
+    comm: [u8; 16], // process name captured in kernel-space
 }
 
-// Safety: repr(C), all u64 fields are valid for all bit patterns, no padding.
+// Safety: repr(C), all fields (u64, u64, [u8; 16]) are valid for all bit patterns, no padding.
 unsafe impl aya::Pod for LocalPidNetStats {}
 
 /// Embedded BPF object, compiled by build.rs at build time.
@@ -57,7 +58,9 @@ fn load_and_attach_kprobe(bpf: &mut Ebpf, prog_name: &str, kernel_func: &str) ->
 impl NetworkCollector {
     /// Load and attach the BPF kprobes. Requires CAP_BPF or root.
     pub fn new() -> Result<Self> {
+        log::trace!("Not sure why, but these two logs need to stay in place");
         let mut bpf = Ebpf::load(BPF_BYTES)?;
+        log::trace!("With out them, the Ebpf load fails");
 
         // Attach kprobe to tcp_sendmsg (tx)
         load_and_attach_kprobe(&mut bpf, "trace_sendmsg", "tcp_sendmsg")?;
@@ -75,7 +78,7 @@ impl NetworkCollector {
     ///
     /// Delta calculation:
     /// - Reads all (pid, PidNetStats) pairs from the BPF map.
-    /// - Resolves each PID to an app name via /proc.
+    /// - Resolves each PID to an app name (kernel comm field preferred, /proc fallback).
     /// - Aggregates stats by app_name (handles multiple PIDs per app).
     /// - Subtracts previous snapshot to get per-interval deltas.
     /// - If current < previous for an app, the PID was reused — treat as 0 delta.
@@ -96,18 +99,14 @@ impl NetworkCollector {
         for entry in stats_map.iter() {
             let (pid, local_stats) = entry?;
 
-            // Resolve PID to app name; fall back to "pid:XXXX" if not found
-            let app_name = match get_process_name(pid) {
-                Ok(name) => name,
-                Err(error) => {
-                    log::error!(
-                        "Failed to get the process name for pid {}: error {}",
-                        pid,
-                        error
-                    );
-                    format!("pid:{}", pid)
-                }
-            };
+            // Resolve app name from multiple sources (in priority order):
+            // 1. Try /proc lookup first (always current for running processes, detects PID reuse)
+            // 2. Fall back to kernel-captured comm (works even after process exits, captures at first packet)
+            // 3. Fall back to "pid:XXXX"
+            let app_name = get_process_name(pid)
+                .ok()
+                .or_else(|| comm_to_string(&local_stats.comm))
+                .unwrap_or_else(|| format!("pid:{}", pid));
 
             // Aggregate: if multiple PIDs belong to the same app, sum their traffic
             let entry = current_by_app.entry(app_name).or_default();
@@ -143,4 +142,19 @@ impl NetworkCollector {
 
         Ok(records)
     }
+}
+
+/// Convert a null-terminated byte array (from kernel comm field) to a String.
+/// Returns None if the comm is empty or invalid UTF-8.
+fn comm_to_string(comm: &[u8; 16]) -> Option<String> {
+    // Find the null terminator
+    let end = comm.iter().position(|&b| b == 0).unwrap_or(16);
+
+    // Empty comm field
+    if end == 0 {
+        return None;
+    }
+
+    // Convert to UTF-8 string, replacing invalid bytes with replacement character
+    Some(String::from_utf8_lossy(&comm[..end]).into_owned())
 }

@@ -1,6 +1,7 @@
 //! Heimwatch daemon: polling loop that feeds network metrics into storage.
 
 pub mod logging;
+pub mod snapshot;
 
 use anyhow::Result;
 use heimwatch_collector::PlatformCollector;

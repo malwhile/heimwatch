@@ -2,7 +2,7 @@
 #![no_main]
 
 use aya_ebpf::{
-    helpers::bpf_get_current_pid_tgid,
+    helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid},
     macros::{kprobe, kretprobe, map},
     maps::HashMap,
     programs::{ProbeContext, RetProbeContext},
@@ -54,14 +54,18 @@ fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
     match stats {
         Some(s) => unsafe { (*s).tx_bytes = (*s).tx_bytes.saturating_add(size) },
         None => {
+            // Capture the current process name (comm field from task_struct)
+            let comm = bpf_get_current_comm().unwrap_or([0u8; 16]);
+
             let new_stats = PidNetStats {
                 tx_bytes: size,
                 rx_bytes: 0,
+                comm,
             };
             // Attempt to insert; map may be full if many processes are running.
             // Log to kernel trace buffer if insertion fails.
             if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
-                warn!(ctx, "NETWORK_STATS map full; cannot track PID {}", pid);
+                warn!(ctx, "NETWORK_STATS map full");
             }
         }
     }
@@ -104,14 +108,18 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
     match stats {
         Some(s) => unsafe { (*s).rx_bytes = (*s).rx_bytes.saturating_add(bytes_received as u64) },
         None => {
+            // Capture the current process name (comm field from task_struct)
+            let comm = bpf_get_current_comm().unwrap_or([0u8; 16]);
+
             let new_stats = PidNetStats {
                 tx_bytes: 0,
                 rx_bytes: bytes_received as u64,
+                comm,
             };
             // Attempt to insert; map may be full if many processes are running.
             // Log to kernel trace buffer if insertion fails.
             if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
-                warn!(ctx, "NETWORK_STATS map full; cannot track PID {}", pid);
+                warn!(ctx, "NETWORK_STATS map full");
             }
         }
     }

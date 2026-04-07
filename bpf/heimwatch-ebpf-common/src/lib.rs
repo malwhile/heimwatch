@@ -8,4 +8,8 @@
 pub struct PidNetStats {
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+    /// Process name captured at first packet, from the kernel task_struct comm field.
+    /// Null-terminated, max 15 chars + null (TASK_COMM_LEN = 16).
+    /// Captured in kernel-space so it's valid even after the process exits.
+    pub comm: [u8; 16],
 }

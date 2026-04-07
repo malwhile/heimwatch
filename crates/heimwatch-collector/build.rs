@@ -11,8 +11,8 @@ fn build_ebpf() {
     let out_path = std::path::PathBuf::from(&out_dir);
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
 
-    println!("cargo:rerun-if-changed=../bpf/heimwatch-ebpf/src/");
-    println!("cargo:rerun-if-changed=../bpf/heimwatch-ebpf-common/src/");
+    println!("cargo:rerun-if-changed=../../bpf/heimwatch-ebpf/src/");
+    println!("cargo:rerun-if-changed=../../bpf/heimwatch-ebpf-common/src/");
 
     // Use cargo directly to build eBPF (nightly with BPF target).
     // We build to a temporary directory and then move the artifact.
@@ -30,8 +30,8 @@ fn build_ebpf() {
     let ebpf_manifest = workspace_root.join("bpf/heimwatch-ebpf/Cargo.toml");
 
     // CARGO_ENCODED_RUSTFLAGS uses \x1f as separator, not spaces
-    let rustflags =
-        "--cfg=bpf_target_arch=\"x86_64\"\x1f-Cdebuginfo=2\x1f-Clink-arg=--btf".to_string();
+    // Note: minimal flags to avoid ELF parsing issues with aya_obj
+    let rustflags = "--cfg=bpf_target_arch=\"x86_64\"".to_string();
 
     let mut cmd = std::process::Command::new("rustup");
     cmd.args(["run", "nightly", "cargo", "build"])
