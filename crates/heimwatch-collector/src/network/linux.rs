@@ -58,7 +58,9 @@ fn load_and_attach_kprobe(bpf: &mut Ebpf, prog_name: &str, kernel_func: &str) ->
 impl NetworkCollector {
     /// Load and attach the BPF kprobes. Requires CAP_BPF or root.
     pub fn new() -> Result<Self> {
+        log::trace!("Not sure why, but these two logs need to stay in place");
         let mut bpf = Ebpf::load(BPF_BYTES)?;
+        log::trace!("With out them, the Ebpf load fails");
 
         // Attach kprobe to tcp_sendmsg (tx)
         load_and_attach_kprobe(&mut bpf, "trace_sendmsg", "tcp_sendmsg")?;
