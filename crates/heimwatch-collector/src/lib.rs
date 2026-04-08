@@ -5,10 +5,12 @@
 //! platform-specific collectors that `PlatformCollector` coordinates.
 
 pub mod error;
+pub mod focus;
 mod network;
 
 use anyhow::Result;
 pub use error::CollectorError;
+pub use focus::FocusCollector;
 use heimwatch_core::{Collector, MetricRecord};
 use network::NetworkCollector;
 
@@ -19,14 +21,27 @@ use network::NetworkCollector;
 /// Platform-specific implementations are selected at compile time.
 pub struct PlatformCollector {
     network: NetworkCollector,
+    focus_collector: Option<FocusCollector>,
 }
 
 impl PlatformCollector {
     /// Initialize the platform collector with OS-specific implementations.
     pub fn new() -> Result<Self> {
         let network = NetworkCollector::new()?;
+        let focus_collector = FocusCollector::try_new();
 
-        Ok(PlatformCollector { network })
+        Ok(PlatformCollector {
+            network,
+            focus_collector,
+        })
+    }
+
+    /// Extracts the focus collector for spawning as an independent task.
+    ///
+    /// This is used by the daemon to run focus tracking in a separate tokio task
+    /// (since focus is event-driven, not poll-based like the network collector).
+    pub fn take_focus_collector(&mut self) -> Option<FocusCollector> {
+        self.focus_collector.take()
     }
 }
 

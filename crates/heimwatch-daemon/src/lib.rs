@@ -9,6 +9,7 @@ use heimwatch_core::Collector;
 use heimwatch_storage::StorageLayer;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::time::interval;
 
 #[derive(strum_macros::Display)]
@@ -59,6 +60,29 @@ pub async fn run(poll_interval: Duration, db_path: &str) -> Result<()> {
     let collector = Arc::new(Mutex::new(PlatformCollector::new()?));
     log::debug!("PlatformCollector initialized successfully");
 
+    // Initialize shutdown signal broadcaster (used by focus task and other spawned tasks)
+    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+
+    // Extract and spawn the focus collector (event-driven, runs independently of the poll loop)
+    {
+        let mut collector_guard = lock_collector(&collector);
+        let focus_collector = collector_guard.take_focus_collector();
+        drop(collector_guard); // Release mutex early
+
+        if let Some(fc) = focus_collector {
+            log::info!("Focus tracking active");
+            let storage_fc = Arc::clone(&storage);
+            let shutdown_rx = shutdown_tx.subscribe();
+            tokio::spawn(async move {
+                if let Err(e) = fc.run(storage_fc, shutdown_rx).await {
+                    log::error!("Focus tracking error: {}", e);
+                }
+            });
+        } else {
+            log::warn!("Focus tracking unavailable on this compositor");
+        }
+    }
+
     // Set up periodic collection timer
     let mut collect_interval = interval(poll_interval);
     collect_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -74,6 +98,8 @@ pub async fn run(poll_interval: Duration, db_path: &str) -> Result<()> {
             // Handle OS signals (Ctrl+C)
             _ = tokio::signal::ctrl_c() => {
                 log::info!("Received Ctrl+C, initiating graceful shutdown...");
+                // Signal all tasks (focus, etc.) to shut down
+                let _ = shutdown_tx.send(true);
                 break;
             }
         }

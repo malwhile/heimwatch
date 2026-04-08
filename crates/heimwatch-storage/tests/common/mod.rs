@@ -1,6 +1,8 @@
 //! Common test utilities for heimwatch-storage integration tests.
 
-use heimwatch_storage::{CpuData, MetricPayload, MetricRecord, NetworkData, StorageLayer};
+use heimwatch_storage::{
+    CpuData, FocusData, MetricPayload, MetricRecord, NetworkData, StorageLayer,
+};
 use tempfile::TempDir;
 
 /// Creates a temporary test database for use in tests.
@@ -112,6 +114,41 @@ pub fn make_cpu_record(app_name: &str, timestamp: u64, usage_percent: f32) -> Me
 /// Helper for creating a network metric record with default connections.
 pub fn make_network_record(app_name: &str, timestamp: u64, tx: u64, rx: u64) -> MetricRecord {
     NetworkMetricBuilder::new(app_name, timestamp, tx, rx).build()
+}
+
+/// Builder for creating test focus metrics.
+pub struct FocusMetricBuilder {
+    app_name: String,
+    timestamp: u64,
+    duration_ms: u64,
+}
+
+impl FocusMetricBuilder {
+    /// Create a new focus metric builder with required fields.
+    pub fn new(app_name: impl Into<String>, timestamp: u64, duration_ms: u64) -> Self {
+        Self {
+            app_name: app_name.into(),
+            timestamp,
+            duration_ms,
+        }
+    }
+
+    /// Build the metric record.
+    pub fn build(self) -> MetricRecord {
+        MetricRecord {
+            app_name: self.app_name.clone(),
+            timestamp: self.timestamp,
+            payload: MetricPayload::Foc(FocusData {
+                app_id: self.app_name,
+                duration_ms: self.duration_ms,
+            }),
+        }
+    }
+}
+
+/// Helper for creating a focus metric record.
+pub fn make_focus_record(app_name: &str, timestamp: u64, duration_ms: u64) -> MetricRecord {
+    FocusMetricBuilder::new(app_name, timestamp, duration_ms).build()
 }
 
 /// Helper for inserting multiple records at once.

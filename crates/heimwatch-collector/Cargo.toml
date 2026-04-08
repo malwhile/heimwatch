@@ -6,15 +6,19 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 heimwatch-core.workspace = true
+heimwatch-storage.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 log.workspace = true
 
-# Linux-only dependencies (eBPF network monitoring)
+# Linux-only dependencies (eBPF network monitoring, Wayland focus tracking)
 [target.'cfg(target_os = "linux")'.dependencies]
 heimwatch-ebpf-common = { path = "../../bpf/heimwatch-ebpf-common" }
 aya.workspace = true
 aya-log.workspace = true
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+zbus = { version = "4", features = ["tokio"] }
 
 [build-dependencies]
 

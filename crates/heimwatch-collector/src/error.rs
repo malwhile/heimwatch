@@ -29,6 +29,18 @@ pub enum CollectorError {
     /// System time error (e.g., clock not available).
     #[error("system time error")]
     SystemTimeError,
+
+    /// Wayland wlr-foreign-toplevel protocol unavailable.
+    #[error("wlr-foreign-toplevel protocol unavailable")]
+    WlrToplevelUnavailable,
+
+    /// D-Bus connection failed (GNOME fallback).
+    #[error("D-Bus connection failed: {0}")]
+    DbusError(String),
+
+    /// Focus tracking unavailable on this compositor.
+    #[error("focus tracking unavailable: no supported compositor found")]
+    FocusUnavailable,
 }
 
 #[cfg(target_os = "linux")]
