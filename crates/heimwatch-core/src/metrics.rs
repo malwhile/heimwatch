@@ -63,8 +63,8 @@ pub struct PowerData {
 /// Window focus data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FocusData {
-    pub window_title: String,
-    pub duration_seconds: u32,
+    pub app_id: String,
+    pub duration_ms: u64,
 }
 
 /// CPU usage data.
@@ -148,4 +148,11 @@ pub struct AppNetworkStats {
     pub app_name: String,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+}
+
+/// Aggregated focus time statistics for an app across a time range.
+#[derive(Debug, Clone)]
+pub struct AppFocusStats {
+    pub app_name: String,
+    pub total_duration_ms: u64,
 }

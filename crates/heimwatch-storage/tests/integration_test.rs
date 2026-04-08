@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use common::*;
 use heimwatch_core::current_unix_timestamp;
-use heimwatch_storage::{CpuData, MetricPayload, MetricType, StorageError};
+use heimwatch_storage::{CpuData, FocusData, MetricPayload, MetricType, StorageError};
 
 #[test]
 fn test_insert_and_read_back() {
@@ -228,4 +228,90 @@ fn test_aggregated_cpu_not_found() {
         err.downcast_ref::<StorageError>(),
         Some(StorageError::NotFound)
     ));
+}
+
+#[test]
+fn test_focus_event_insert_and_read_back() {
+    let (db, _tmpdir) = create_test_db();
+
+    db.insert_focus_event("firefox", 5000, 1000).unwrap();
+
+    let results = db.get_metrics_by_type(MetricType::Foc, 0, 2000).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].app_name, "firefox");
+
+    if let MetricPayload::Foc(FocusData {
+        app_id,
+        duration_ms,
+    }) = &results[0].payload
+    {
+        assert_eq!(app_id, "firefox");
+        assert_eq!(*duration_ms, 5000);
+    } else {
+        panic!("Expected Foc payload");
+    }
+}
+
+#[test]
+fn test_get_top_apps_by_focus_sorted() {
+    let (db, _tmpdir) = create_test_db();
+
+    // Insert three apps with different total focus times
+    let r1 = make_focus_record("firefox", 1000, 10000); // 10s
+    let r2 = make_focus_record("code", 1000, 5000); // 5s
+    let r3 = make_focus_record("firefox", 2000, 15000); // 15s (total: 25s for firefox)
+
+    db.insert_metric(&r1).unwrap();
+    db.insert_metric(&r2).unwrap();
+    db.insert_metric(&r3).unwrap();
+
+    let stats = db.get_top_apps_by_focus(0, 3000, 10).unwrap();
+    assert_eq!(stats.len(), 2);
+    // Firefox should be first (25s total)
+    assert_eq!(stats[0].app_name, "firefox");
+    assert_eq!(stats[0].total_duration_ms, 25000);
+    // Code should be second (5s total)
+    assert_eq!(stats[1].app_name, "code");
+    assert_eq!(stats[1].total_duration_ms, 5000);
+}
+
+#[test]
+fn test_get_top_apps_by_focus_time_range() {
+    let (db, _tmpdir) = create_test_db();
+
+    // Insert records outside and inside a range
+    let r1 = make_focus_record("app1", 500, 1000);
+    let r2 = make_focus_record("app1", 1500, 2000); // Inside range
+    let r3 = make_focus_record("app1", 2500, 3000);
+
+    db.insert_metric(&r1).unwrap();
+    db.insert_metric(&r2).unwrap();
+    db.insert_metric(&r3).unwrap();
+
+    // Query range [1000, 2000] — should only include r2
+    let stats = db.get_top_apps_by_focus(1000, 2000, 10).unwrap();
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].total_duration_ms, 2000);
+}
+
+#[test]
+fn test_get_top_apps_by_focus_limit() {
+    let (db, _tmpdir) = create_test_db();
+
+    // Insert records for 5 apps
+    for i in 0..5 {
+        let record = make_focus_record(&format!("app{}", i), 1000, 1000 * (i as u64 + 1));
+        db.insert_metric(&record).unwrap();
+    }
+
+    // Request top 3
+    let stats = db.get_top_apps_by_focus(0, 2000, 3).unwrap();
+    assert_eq!(stats.len(), 3);
+    // Should be sorted descending: app4 (5000ms), app3 (4000ms), app2 (3000ms)
+    assert_eq!(stats[0].app_name, "app4");
+    assert_eq!(stats[0].total_duration_ms, 5000);
+    assert_eq!(stats[1].app_name, "app3");
+    assert_eq!(stats[1].total_duration_ms, 4000);
+    assert_eq!(stats[2].app_name, "app2");
+    assert_eq!(stats[2].total_duration_ms, 3000);
 }

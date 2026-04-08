@@ -12,8 +12,8 @@ use crate::error::StorageError;
 use crate::keys;
 use anyhow::{Context, Result};
 use heimwatch_core::{
-    AppNetworkStats, CpuData, MetricPayload, MetricRecord, MetricType, NetworkData,
-    current_unix_timestamp,
+    AppFocusStats, AppNetworkStats, CpuData, FocusData, MetricPayload, MetricRecord, MetricType,
+    NetworkData, current_unix_timestamp,
 };
 use sled::Db;
 use std::collections::HashMap;
@@ -268,5 +268,58 @@ impl StorageLayer {
     pub fn flush(&self) -> Result<()> {
         self.db.flush()?;
         Ok(())
+    }
+
+    /// Insert a focus event (app focus duration).
+    ///
+    /// Constructs a MetricRecord and delegates to insert_metric.
+    pub fn insert_focus_event(
+        &self,
+        app_name: &str,
+        duration_ms: u64,
+        timestamp: u64,
+    ) -> Result<()> {
+        let record = MetricRecord {
+            app_name: app_name.to_string(),
+            timestamp,
+            payload: MetricPayload::Foc(FocusData {
+                app_id: app_name.to_string(),
+                duration_ms,
+            }),
+        };
+        self.insert_metric(&record)
+    }
+
+    /// Get the top N apps by total focus time over a time range.
+    pub fn get_top_apps_by_focus(
+        &self,
+        start: u64,
+        end: u64,
+        limit: usize,
+    ) -> Result<Vec<AppFocusStats>> {
+        let records = self.get_metrics_by_type(MetricType::Foc, start, end)?;
+
+        let mut app_totals: HashMap<String, u64> = HashMap::new();
+
+        for record in records {
+            if let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload {
+                let total = app_totals.entry(record.app_name).or_insert(0);
+                *total += duration_ms;
+            }
+        }
+
+        let mut stats: Vec<AppFocusStats> = app_totals
+            .into_iter()
+            .map(|(app_name, total_duration_ms)| AppFocusStats {
+                app_name,
+                total_duration_ms,
+            })
+            .collect();
+
+        // Sort by total duration descending
+        stats.sort_by(|a, b| b.total_duration_ms.cmp(&a.total_duration_ms));
+
+        stats.truncate(limit);
+        Ok(stats)
     }
 }
