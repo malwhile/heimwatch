@@ -7,8 +7,10 @@ use wayland_client::{
     protocol::wl_registry,
 };
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
-    zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
-    zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
+    zwlr_foreign_toplevel_handle_v1,
+    zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+    zwlr_foreign_toplevel_manager_v1,
+    zwlr_foreign_toplevel_manager_v1::{EVT_TOPLEVEL_OPCODE, ZwlrForeignToplevelManagerV1},
 };
 
 use super::ToplevelInfo;
@@ -60,9 +62,6 @@ pub struct WlrToplevelState {
 
 /// Spawns a blocking task to listen for Wayland wlr-foreign-toplevel events.
 pub fn spawn_wlr_toplevel_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
-    use wayland_client::globals::registry_queue_init;
-    use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1;
-
     let conn =
         Connection::connect_to_env().map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
 
@@ -138,9 +137,6 @@ impl Dispatch<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, ()
         opcode: u16,
         qhandle: &QueueHandle<Self>,
     ) -> std::sync::Arc<dyn wayland_client::backend::ObjectData> {
-        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1;
-        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE;
-
         match opcode {
             EVT_TOPLEVEL_OPCODE => qhandle.make_data::<ZwlrForeignToplevelHandleV1, ()>(()),
             _ => panic!("Unexpected opcode in foreign toplevel manager: {}", opcode),

@@ -15,6 +15,12 @@ use tokio::sync::{mpsc, watch};
 use heimwatch_core::current_unix_timestamp;
 use heimwatch_storage::StorageLayer;
 
+/// Per-toplevel state accumulated between protocol events.
+pub struct ToplevelInfo {
+    pub app_id: Option<String>,
+    pub is_activated: bool,
+}
+
 /// Represents the source of focus events.
 enum FocusSource {
     WlrToplevel,
@@ -156,12 +162,6 @@ fn normalize_app_id(raw: Option<String>) -> String {
             s
         })
         .unwrap_or_else(|| "Unknown".to_string())
-}
-
-/// Per-toplevel state accumulated between protocol events.
-pub struct ToplevelInfo {
-    pub app_id: Option<String>,
-    pub is_activated: bool,
 }
 
 #[cfg(test)]

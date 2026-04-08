@@ -39,15 +39,23 @@ enum Command {
         #[arg(short, long, default_value = "./heimwatch.db")]
         db: String,
     },
-    /// Capture a one-shot traffic snapshot and print to stdout
+    /// Capture a snapshot and print to stdout (network: one-shot probes; focus: query database)
     Snapshot {
-        /// Observation window in seconds (probes attach, traffic accumulates, then results print)
+        /// Observation window in seconds (network: probes attach & collect; focus: query last N seconds)
         #[arg(short, long, default_value = "3")]
         window: u64,
 
         /// Output format: text (human-readable) or json
         #[arg(short, long, default_value = "text")]
         format: String,
+
+        /// Metric type: network or focus
+        #[arg(short, long, default_value = "network")]
+        metric_type: String,
+
+        /// Database path (required for focus metric, optional for network)
+        #[arg(short, long)]
+        db: Option<String>,
     },
 }
 
@@ -70,8 +78,8 @@ async fn main() -> anyhow::Result<()> {
             let poll_interval = Duration::from_secs(interval);
             run(poll_interval, &db).await?;
         }
-        Command::Snapshot { window, format } => {
-            snapshot::run_snapshot(window, &format).await?;
+        Command::Snapshot { window, format, metric_type, db } => {
+            snapshot::run_snapshot(window, &format, &metric_type, db.as_deref()).await?;
         }
     }
 
