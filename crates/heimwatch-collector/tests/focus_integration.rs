@@ -6,7 +6,7 @@ mod tests {
     fn test_try_new_does_not_panic_without_wayland() {
         // Must not panic regardless of environment (whether Wayland is available or not)
         let result = FocusCollector::try_new();
-        assert!(!result.is_none());
+        assert!(result.is_some());
     }
 
     #[test]
