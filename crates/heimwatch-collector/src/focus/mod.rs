@@ -5,11 +5,7 @@ mod linux;
 pub use linux::FocusCollector;
 
 #[cfg(not(target_os = "linux"))]
-pub struct FocusCollector;
+mod stub;
 
 #[cfg(not(target_os = "linux"))]
-impl FocusCollector {
-    pub fn try_new() -> Option<Self> {
-        None
-    }
-}
+pub use stub::FocusCollector;

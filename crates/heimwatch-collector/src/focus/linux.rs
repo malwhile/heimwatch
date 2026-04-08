@@ -36,7 +36,7 @@ impl FocusCollector {
     /// is available. Returns `None` if neither is accessible (graceful degradation).
     pub fn try_new() -> Option<Self> {
         // Try Wayland first
-        if let Ok(_) = try_wlr_toplevel_available() {
+        if try_wlr_toplevel_available().is_ok() {
             log::debug!("Focus tracking: wlr-foreign-toplevel-management-v1 available");
             return Some(FocusCollector {
                 source: FocusSource::WlrToplevel,
@@ -44,7 +44,7 @@ impl FocusCollector {
         }
 
         // Fall back to GNOME D-Bus
-        if let Ok(_) = try_gnome_dbus_available() {
+        if try_gnome_dbus_available().is_ok() {
             log::debug!("Focus tracking: GNOME D-Bus available (fallback)");
             return Some(FocusCollector {
                 source: FocusSource::GnomeDbus,
@@ -123,7 +123,7 @@ impl FocusCollector {
                     log::warn!("Focus listener task failed; exiting");
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
-                        let timestamp = current_unix_timestamp().unwrap_or_else(|_| 0);
+                        let timestamp = current_unix_timestamp().unwrap_or(0);
                         let _ = storage.insert_focus_event(app, elapsed_ms, timestamp);
                     }
                     break;
@@ -148,7 +148,7 @@ fn normalize_app_id(raw: Option<String>) -> String {
             }
             if let Some(rest) = s.strip_prefix("snap.") {
                 // Snap IDs are like "snap.firefox.firefox" — take the last component
-                return rest.split('.').last().unwrap_or(&rest).to_string();
+                return rest.split('.').next_back().unwrap_or(rest).to_string();
             }
             s
         })
