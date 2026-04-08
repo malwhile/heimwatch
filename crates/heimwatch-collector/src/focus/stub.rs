@@ -1,6 +1,10 @@
 //! Stub focus collector for non-Linux platforms.
 
 use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::watch;
+
+use heimwatch_storage::StorageLayer;
 
 /// Placeholder collector for macOS, Windows, etc.
 pub struct FocusCollector;
