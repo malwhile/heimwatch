@@ -1,6 +1,6 @@
 //! One-shot metric snapshots: network traffic and focus time.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use heimwatch_collector::PlatformCollector;
 use heimwatch_core::{Collector, MetricPayload, current_unix_timestamp};
 use heimwatch_storage::StorageLayer;
@@ -28,7 +28,8 @@ pub async fn run_snapshot(
 ) -> Result<()> {
     match metric_type {
         "focus" => run_focus_snapshot(window_secs, format, db_path).await,
-        "network" | _ => run_network_snapshot(window_secs, format).await,
+        "network" => run_network_snapshot(window_secs, format).await,
+        _ => anyhow::bail!("Please choose either network or focus"),
     }
 }
 
@@ -73,8 +74,8 @@ async fn run_focus_snapshot(window_secs: u64, format: &str, db_path: Option<&str
     log::info!("Querying focus events from last {}s...", window_secs);
 
     // Open storage layer
-    let storage = StorageLayer::open(db_path)
-        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    let storage =
+        StorageLayer::open(db_path).map_err(|e| anyhow!("Failed to open database: {}", e))?;
 
     // Query focus events from the last N seconds
     let now = current_unix_timestamp()?;
@@ -143,7 +144,8 @@ fn print_focus_table(records: &[heimwatch_core::MetricRecord], window_secs: u64)
         println!("  (no focus events recorded)");
     } else {
         // Aggregate focus time by app
-        let mut app_totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut app_totals: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
         for r in records {
             if let MetricPayload::Foc(foc) = &r.payload {
                 *app_totals.entry(r.app_name.clone()).or_insert(0) += foc.duration_ms;
@@ -164,11 +166,7 @@ fn print_focus_table(records: &[heimwatch_core::MetricRecord], window_secs: u64)
             total_ms += duration_ms;
         }
         println!("{}", "─".repeat(52));
-        println!(
-            "  {:<28} {:>20}",
-            "Total",
-            fmt_duration_ms(total_ms)
-        );
+        println!("  {:<28} {:>20}", "Total", fmt_duration_ms(total_ms));
     }
     println!();
 }
