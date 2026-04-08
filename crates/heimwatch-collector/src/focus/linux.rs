@@ -4,7 +4,8 @@
 //! protocol or falls back to GNOME D-Bus signals. Tracks elapsed time in memory
 //! and persists focus sessions to the storage layer on focus-change events.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
@@ -123,7 +124,7 @@ impl FocusCollector {
                     log::warn!("Focus listener task failed; exiting");
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
-                        let timestamp = current_unix_timestamp().unwrap_or(0);
+                        let timestamp = current_unix_timestamp().unwrap_or_else(|_| 0);
                         let _ = storage.insert_focus_event(app, elapsed_ms, timestamp);
                     }
                     break;
@@ -148,53 +149,229 @@ fn normalize_app_id(raw: Option<String>) -> String {
             }
             if let Some(rest) = s.strip_prefix("snap.") {
                 // Snap IDs are like "snap.firefox.firefox" — take the last component
-                return rest.split('.').next_back().unwrap_or(rest).to_string();
+                return rest.split('.').last().unwrap_or(&rest).to_string();
             }
             s
         })
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Quick check: is the wlr-foreign-toplevel protocol available?
+/// Check if the wlr-foreign-toplevel protocol is available.
 fn try_wlr_toplevel_available() -> Result<()> {
+    use wayland_client::globals::registry_queue_init;
     use wayland_client::Connection;
+    use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1;
 
-    let _conn =
-        Connection::connect_to_env().map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
-    // Confirm Wayland is accessible; full protocol check happens in listener
-    Ok(())
+    let conn = Connection::connect_to_env()
+        .map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
+
+    // Use minimal noop state to check protocol availability
+    let (globals, _queue) = registry_queue_init::<NoopRegistryState>(&conn)
+        .map_err(|e| anyhow!("Registry init failed: {}", e))?;
+
+    // Check if the protocol is in the global list without binding
+    let found = globals.contents().with_list(|list| {
+        let iface_name = ZwlrForeignToplevelManagerV1::interface().name;
+        list.iter().any(|g| g.interface == iface_name)
+    });
+
+    if found {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "zwlr-foreign-toplevel-management-v1 protocol not available"
+        ))
+    }
 }
 
-/// Quick check: is GNOME D-Bus accessible?
+/// Check if GNOME D-Bus is accessible.
 fn try_gnome_dbus_available() -> Result<()> {
     // D-Bus availability is checked at runtime in the async spawner.
     // This is a best-effort check; the actual connection happens later.
     Ok(())
 }
 
+// ============================================================================
+// Wayland Protocol Implementation
+// ============================================================================
+
+use wayland_client::{
+    globals::GlobalListContents, protocol::wl_registry, Connection, Dispatch, Proxy,
+    QueueHandle,
+};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
+};
+
+/// Minimal state for protocol availability check.
+struct NoopRegistryState;
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for NoopRegistryState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No-op: only used for initial registry roundtrip
+    }
+}
+
+/// Per-toplevel state accumulated between protocol events.
+struct ToplevelInfo {
+    app_id: Option<String>,
+    is_activated: bool,
+}
+
+/// Wayland event dispatcher state for focus tracking.
+struct WlrToplevelState {
+    toplevels: HashMap<wayland_client::backend::ObjectId, ToplevelInfo>,
+    tx: mpsc::Sender<Option<String>>,
+}
+
 /// Spawns a blocking task to listen for Wayland wlr-foreign-toplevel events.
 fn spawn_wlr_toplevel_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
-    use wayland_client::Connection;
+    use wayland_client::globals::registry_queue_init;
+    use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1;
 
-    let _conn =
-        Connection::connect_to_env().map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
+    let conn = Connection::connect_to_env()
+        .map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
 
-    // TODO: Complete implementation:
-    // 1. Create an event queue
-    // 2. Bind to ZwlrForeignToplevelManagerV1 from the registry
-    // 3. Listen for toplevel announcements and state changes
-    // 4. Extract app_id and send on channel on focus changes
-    //
-    // For now, return error to trigger fallback to D-Bus.
-    log::debug!("wlr-foreign-toplevel listener stub (not yet fully implemented)");
-    let _ = tx; // Silence unused variable warning
-    Err(anyhow!(
-        "wlr-foreign-toplevel listener not yet fully implemented"
-    ))
+    let (globals, mut event_queue) = registry_queue_init::<WlrToplevelState>(&conn)
+        .map_err(|e| anyhow!("Registry init failed: {}", e))?;
+
+    let qh = event_queue.handle();
+
+    // Bind the manager; fails if protocol absent
+    let _manager: ZwlrForeignToplevelManagerV1 = globals
+        .bind(&qh, 1..=3, ())
+        .map_err(|e| anyhow!("Failed to bind zwlr_foreign_toplevel_manager: {:?}", e))?;
+
+    let mut state = WlrToplevelState {
+        toplevels: HashMap::new(),
+        tx,
+    };
+
+    // Main event loop (blocking, suitable for spawn_blocking)
+    loop {
+        event_queue
+            .blocking_dispatch(&mut state)
+            .map_err(|e| anyhow!("Wayland dispatch error: {}", e))?;
+    }
+}
+
+// Dispatch for WlRegistry (required by registry_queue_init)
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WlrToplevelState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No-op: registry events handled during init
+    }
+}
+
+// Dispatch for ZwlrForeignToplevelManagerV1
+impl Dispatch<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, ()>
+    for WlrToplevelState
+{
+    fn event(
+        state: &mut Self,
+        _proxy: &zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
+                // New toplevel created by server; register it
+                state.toplevels.insert(
+                    toplevel.id(),
+                    ToplevelInfo {
+                        app_id: None,
+                        is_activated: false,
+                    },
+                );
+            }
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => {
+                // Compositor finished sending toplevels; handled gracefully
+                log::debug!("Foreign toplevel manager finished");
+            }
+            _ => {}
+        }
+    }
+
+    fn event_created_child(
+        opcode: u16,
+        qhandle: &QueueHandle<Self>,
+    ) -> std::sync::Arc<dyn wayland_client::backend::ObjectData> {
+        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE;
+        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1;
+
+        match opcode {
+            EVT_TOPLEVEL_OPCODE => qhandle.make_data::<ZwlrForeignToplevelHandleV1, ()>(()),
+            _ => panic!("Unexpected opcode in foreign toplevel manager: {}", opcode),
+        }
+    }
+}
+
+// Dispatch for ZwlrForeignToplevelHandleV1 (core focus tracking)
+impl Dispatch<zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1, ()>
+    for WlrToplevelState
+{
+    fn event(
+        state: &mut Self,
+        proxy: &zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let id = proxy.id();
+
+        match event {
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                if let Some(info) = state.toplevels.get_mut(&id) {
+                    info.app_id = Some(app_id);
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::State { state: state_bytes } => {
+                // Decode state array (4-byte little-endian u32 chunks)
+                let activated = state_bytes
+                    .chunks_exact(4)
+                    .map(|c| {
+                        u32::from_ne_bytes([c[0], c[1], c[2], c[3]])
+                    })
+                    .any(|v| v == zwlr_foreign_toplevel_handle_v1::State::Activated as u32);
+
+                if let Some(info) = state.toplevels.get_mut(&id) {
+                    info.is_activated = activated;
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Done => {
+                // Properties are committed; check if focused and send
+                if let Some(info) = state.toplevels.get(&id) {
+                    if info.is_activated {
+                        let _ = state.tx.try_send(info.app_id.clone());
+                    }
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Closed => {
+                state.toplevels.remove(&id);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Spawns an async task to listen for GNOME D-Bus window focus signals.
-async fn spawn_gnome_dbus_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
+async fn spawn_gnome_dbus_listener(_tx: mpsc::Sender<Option<String>>) -> Result<()> {
     use zbus::Connection;
 
     let _conn = Connection::session()
@@ -209,7 +386,6 @@ async fn spawn_gnome_dbus_listener(tx: mpsc::Sender<Option<String>>) -> Result<(
     //
     // For now, this is a stub that keeps the listener alive.
     log::debug!("GNOME D-Bus listener started (stub implementation)");
-    let _ = tx; // Silence unused variable warning
 
     // Keep the listener alive; will be cancelled on shutdown
     std::future::pending().await
