@@ -84,11 +84,12 @@ sled = { version = "0.34" } # Embedded key-value database for metrics
 # ============================================================================
 # These are conditionally compiled and only active on Linux.
 # See: crates/heimwatch-ebpf/build.rs and crates/heimwatch-collector/build.rs
-aya = { version = "0.13", features = ["async_tokio"] } # eBPF framework for kernel-space monitoring
-aya-log = { version = "0.2" }                          # Logging support in eBPF programs
-aya-build = { version = "0.1" }                        # Build-time eBPF compilation helpers
-aya-ebpf = { version = "0.1" }                         # eBPF program runtime library
-aya-log-ebpf = { version = "0.1" }                     # In-kernel logging for eBPF
+# Pinned to known-good git commit that includes ELF parser fixes
+aya = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3520c66db45baf3832ea" }
+aya-log = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3520c66db45baf3832ea" }
+aya-build = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3520c66db45baf3832ea" }
+aya-ebpf = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3520c66db45baf3832ea" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3520c66db45baf3832ea" }
 
 # ============================================================================
 # Development & Testing
