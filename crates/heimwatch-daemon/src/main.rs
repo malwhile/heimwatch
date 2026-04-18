@@ -39,15 +39,36 @@ enum Command {
         #[arg(short, long, default_value = "./heimwatch.db")]
         db: String,
     },
-    /// Capture a one-shot traffic snapshot and print to stdout
-    Snapshot {
-        /// Observation window in seconds (probes attach, traffic accumulates, then results print)
+    /// Capture a snapshot and print to stdout
+    #[command(subcommand)]
+    Snapshot(SnapshotCommand),
+}
+
+#[derive(Subcommand, Debug)]
+enum SnapshotCommand {
+    /// One-shot network traffic snapshot (attaches eBPF probes)
+    Network {
+        /// Observation window in seconds (probes attach, traffic accumulates, then collect)
         #[arg(short, long, default_value = "3")]
         window: u64,
 
         /// Output format: text (human-readable) or json
         #[arg(short, long, default_value = "text")]
         format: String,
+    },
+    /// Focus time snapshot (queries database for focus events)
+    Focus {
+        /// Query window in seconds (e.g., last 30 seconds of focus data)
+        #[arg(short, long, default_value = "30")]
+        window: u64,
+
+        /// Output format: text (human-readable) or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
+        /// Database path (required for focus snapshot)
+        #[arg(short, long)]
+        db: String,
     },
 }
 
@@ -70,9 +91,14 @@ async fn main() -> anyhow::Result<()> {
             let poll_interval = Duration::from_secs(interval);
             run(poll_interval, &db).await?;
         }
-        Command::Snapshot { window, format } => {
-            snapshot::run_snapshot(window, &format).await?;
-        }
+        Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
+            SnapshotCommand::Network { window, format } => {
+                snapshot::run_snapshot(window, &format, "network", None).await?;
+            }
+            SnapshotCommand::Focus { window, format, db } => {
+                snapshot::run_snapshot(window, &format, "focus", Some(&db)).await?;
+            }
+        },
     }
 
     Ok(())
