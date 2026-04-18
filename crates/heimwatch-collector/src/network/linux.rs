@@ -32,8 +32,7 @@ struct LocalPidNetStats {
 unsafe impl aya::Pod for LocalPidNetStats {}
 
 /// Embedded BPF object, compiled by build.rs at build time.
-static BPF_BYTES: &[u8] =
-    aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/heimwatch-ebpf"));
+static BPF_BYTES: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/heimwatch-ebpf"));
 
 /// Owns the loaded BPF program and maintains delta state.
 pub struct NetworkCollector {
