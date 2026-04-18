@@ -317,7 +317,7 @@ impl StorageLayer {
             .collect();
 
         // Sort by total duration descending
-        stats.sort_by(|a, b| b.total_duration_ms.cmp(&a.total_duration_ms));
+        stats.sort_by_key(|b| std::cmp::Reverse(b.total_duration_ms));
 
         stats.truncate(limit);
         Ok(stats)

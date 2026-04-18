@@ -30,8 +30,8 @@ fn build_ebpf() {
     let ebpf_manifest = workspace_root.join("bpf/heimwatch-ebpf/Cargo.toml");
 
     // CARGO_ENCODED_RUSTFLAGS uses \x1f as separator, not spaces
-    // Note: minimal flags to avoid ELF parsing issues with aya_obj
-    let rustflags = "--cfg=bpf_target_arch=\"x86_64\"".to_string();
+    let rustflags =
+        "--cfg=bpf_target_arch=\"x86_64\"\x1f-Cdebuginfo=2\x1f-Clink-arg=--btf".to_string();
 
     let mut cmd = std::process::Command::new("rustup");
     cmd.args(["run", "nightly", "cargo", "build"])
