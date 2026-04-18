@@ -1,11 +1,16 @@
+//! Stub focus collector for non-Linux platforms.
+
 use anyhow::Result;
-use heimwatch_storage::StorageLayer;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+use heimwatch_storage::StorageLayer;
+
+/// Placeholder collector for macOS, Windows, etc.
 pub struct FocusCollector;
 
 impl FocusCollector {
+    /// Non-Linux platforms do not support focus tracking (yet).
     pub fn try_new() -> Option<Self> {
         None
     }

@@ -4,13 +4,22 @@
 //! protocol or falls back to GNOME D-Bus signals. Tracks elapsed time in memory
 //! and persists focus sessions to the storage layer on focus-change events.
 
-use anyhow::{Result, anyhow};
+mod dbuslib;
+mod wlrlib;
+
+use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 
 use heimwatch_core::current_unix_timestamp;
 use heimwatch_storage::StorageLayer;
+
+/// Per-toplevel state accumulated between protocol events.
+pub struct ToplevelInfo {
+    pub app_id: Option<String>,
+    pub is_activated: bool,
+}
 
 /// Represents the source of focus events.
 enum FocusSource {
@@ -36,7 +45,7 @@ impl FocusCollector {
     /// is available. Returns `None` if neither is accessible (graceful degradation).
     pub fn try_new() -> Option<Self> {
         // Try Wayland first
-        if try_wlr_toplevel_available().is_ok() {
+        if wlrlib::try_wlr_toplevel_available().is_ok() {
             log::debug!("Focus tracking: wlr-foreign-toplevel-management-v1 available");
             return Some(FocusCollector {
                 source: FocusSource::WlrToplevel,
@@ -44,7 +53,7 @@ impl FocusCollector {
         }
 
         // Fall back to GNOME D-Bus
-        if try_gnome_dbus_available().is_ok() {
+        if dbuslib::try_gnome_dbus_available().is_ok() {
             log::debug!("Focus tracking: GNOME D-Bus available (fallback)");
             return Some(FocusCollector {
                 source: FocusSource::GnomeDbus,
@@ -69,11 +78,11 @@ impl FocusCollector {
         let mut listener_handle = match &self.source {
             FocusSource::WlrToplevel => {
                 let tx = event_tx.clone();
-                tokio::task::spawn_blocking(move || spawn_wlr_toplevel_listener(tx))
+                tokio::task::spawn_blocking(move || wlrlib::spawn_wlr_toplevel_listener(tx))
             }
             FocusSource::GnomeDbus => {
                 let tx = event_tx.clone();
-                tokio::spawn(spawn_gnome_dbus_listener(tx))
+                tokio::spawn(dbuslib::spawn_gnome_dbus_listener(tx))
             }
         };
 
@@ -153,66 +162,6 @@ fn normalize_app_id(raw: Option<String>) -> String {
             s
         })
         .unwrap_or_else(|| "Unknown".to_string())
-}
-
-/// Quick check: is the wlr-foreign-toplevel protocol available?
-fn try_wlr_toplevel_available() -> Result<()> {
-    use wayland_client::Connection;
-
-    let _conn =
-        Connection::connect_to_env().map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
-    // Confirm Wayland is accessible; full protocol check happens in listener
-    Ok(())
-}
-
-/// Quick check: is GNOME D-Bus accessible?
-fn try_gnome_dbus_available() -> Result<()> {
-    // D-Bus availability is checked at runtime in the async spawner.
-    // This is a best-effort check; the actual connection happens later.
-    Ok(())
-}
-
-/// Spawns a blocking task to listen for Wayland wlr-foreign-toplevel events.
-fn spawn_wlr_toplevel_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
-    use wayland_client::Connection;
-
-    let _conn =
-        Connection::connect_to_env().map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
-
-    // TODO: Complete implementation:
-    // 1. Create an event queue
-    // 2. Bind to ZwlrForeignToplevelManagerV1 from the registry
-    // 3. Listen for toplevel announcements and state changes
-    // 4. Extract app_id and send on channel on focus changes
-    //
-    // For now, return error to trigger fallback to D-Bus.
-    log::debug!("wlr-foreign-toplevel listener stub (not yet fully implemented)");
-    let _ = tx; // Silence unused variable warning
-    Err(anyhow!(
-        "wlr-foreign-toplevel listener not yet fully implemented"
-    ))
-}
-
-/// Spawns an async task to listen for GNOME D-Bus window focus signals.
-async fn spawn_gnome_dbus_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
-    use zbus::Connection;
-
-    let _conn = Connection::session()
-        .await
-        .map_err(|e| anyhow!("D-Bus session connection failed: {}", e))?;
-
-    // TODO: Complete implementation:
-    // 1. Subscribe to org.gnome.Shell signals or properties
-    // 2. Listen for focus window changes
-    // 3. Extract app_id from the focused window
-    // 4. Send on the channel
-    //
-    // For now, this is a stub that keeps the listener alive.
-    log::debug!("GNOME D-Bus listener started (stub implementation)");
-    let _ = tx; // Silence unused variable warning
-
-    // Keep the listener alive; will be cancelled on shutdown
-    std::future::pending().await
 }
 
 #[cfg(test)]
