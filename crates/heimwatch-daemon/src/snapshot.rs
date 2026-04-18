@@ -154,7 +154,7 @@ fn print_focus_table(records: &[heimwatch_core::MetricRecord], window_secs: u64)
 
         // Sort by duration descending
         let mut sorted: Vec<_> = app_totals.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         let mut total_ms = 0u64;
         for (app, duration_ms) in sorted {
