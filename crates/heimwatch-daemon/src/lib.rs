@@ -2,6 +2,7 @@
 
 pub mod logging;
 pub mod snapshot;
+pub mod table;
 
 use anyhow::Result;
 use heimwatch_collector::PlatformCollector;

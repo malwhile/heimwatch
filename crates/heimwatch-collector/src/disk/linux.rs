@@ -4,6 +4,7 @@
 //! Uses: aya framework for eBPF program loading and tracepoint attachment
 
 use crate::error::CollectorError;
+use crate::util::{comm_to_string, run_collector_loop};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -147,51 +148,21 @@ impl DiskCollector {
 
     /// Run the disk I/O collection loop.
     pub async fn run(
-        mut self,
+        self,
         tx: mpsc::Sender<CollectorEvent>,
-        mut shutdown: watch::Receiver<bool>,
+        shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
-        let mut ticker = tokio::time::interval(POLL_INTERVAL);
-
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    for record in self.collect_disk(POLL_INTERVAL)? {
-                        if let MetricPayload::Dsk(_) = &record.payload {
-                            let event = CollectorEvent {
-                                app_name: record.app_name.clone(),
-                                payload: record.payload,
-                                timestamp: record.timestamp,
-                            };
-                            if let Err(e) = tx.send(event).await {
-                                log::error!(
-                                    "Failed to send Disk event for app '{}': {}",
-                                    record.app_name,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-
-                _ = shutdown.changed() => {
-                    log::debug!("Disk collector received shutdown signal");
-                    break;
-                }
-            }
-        }
-
-        Ok(())
+        run_collector_loop(
+            self,
+            POLL_INTERVAL,
+            tx,
+            shutdown,
+            |c| c.collect_disk(POLL_INTERVAL),
+            |p| matches!(p, MetricPayload::Dsk(_)),
+            "Disk",
+        )
+        .await
     }
-}
-
-/// Convert a null-terminated byte array (from kernel comm field) to a String.
-fn comm_to_string(comm: &[u8; 16]) -> Option<String> {
-    let end = comm.iter().position(|&b| b == 0).unwrap_or(16);
-    if end == 0 {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&comm[..end]).into_owned())
 }
 
 #[cfg(test)]

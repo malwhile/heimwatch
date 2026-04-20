@@ -9,6 +9,7 @@ pub mod disk;
 pub mod error;
 pub mod focus;
 pub mod network;
+pub mod util;
 
 use anyhow::Result;
 pub use cpu::CpuCollector;

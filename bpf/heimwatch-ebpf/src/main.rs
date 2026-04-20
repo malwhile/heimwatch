@@ -23,6 +23,13 @@ use aya_ebpf::{
 use aya_log_ebpf::warn;
 use heimwatch_ebpf_common::{PidNetStats, PidCpuStats, PidDiskStats};
 
+/// Max entries per BPF map. On larger systems with >10K processes, older/inactive PIDs are evicted.
+/// User-space collector handles missing PIDs gracefully by continuing to next entry.
+const BPF_MAP_ENTRIES: u32 = 10_240;
+
+/// Logical sector size on Linux block devices (bytes).
+const SECTOR_BYTES: u64 = 512;
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
@@ -81,21 +88,19 @@ struct BlockRqIssue {
 }
 
 /// BPF map: key = PID (u32), value = PidNetStats (tx_bytes, rx_bytes)
-/// Max 10,240 entries (~80 KB). Suitable for systems with <10K concurrent processes.
-/// On larger systems, oldest/inactive PIDs are silently dropped.
-/// User-space collector handles missing PIDs gracefully.
+/// ~80 KB. User-space collector handles missing PIDs gracefully.
 #[map]
-static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(10_240, 0);
+static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
 /// BPF map: key = PID (u32), value = PidCpuStats (cpu_time_ns, last_sched_in_ns, comm)
-/// Max 10,240 entries (~120 KB). Tracks cumulative CPU time per process via sched_switch.
+/// ~120 KB. Tracks cumulative CPU time per process via sched_switch.
 #[map]
-static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(10_240, 0);
+static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
 /// BPF map: key = PID (u32), value = PidDiskStats (read_bytes, write_bytes, comm)
-/// Max 10,240 entries (~120 KB). Tracks cumulative block I/O bytes per process via block_rq_issue.
+/// ~120 KB. Tracks cumulative block I/O bytes per process via block_rq_issue.
 #[map]
-static DISK_STATS: HashMap<u32, PidDiskStats> = HashMap::with_max_entries(10_240, 0);
+static DISK_STATS: HashMap<u32, PidDiskStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
 /// Attached to tcp_sendmsg (kprobe on kernel function).
 ///
@@ -302,8 +307,8 @@ fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
         return Ok(());
     }
 
-    // Convert sectors to bytes (512 bytes per sector)
-    let bytes = (rq_issue.nr_sector as u64).saturating_mul(512);
+    // Convert sectors to bytes
+    let bytes = (rq_issue.nr_sector as u64).saturating_mul(SECTOR_BYTES);
 
     // Determine if this is a read (R) or write (W) operation
     let is_read = rq_issue.rwbs[0] == b'R';
