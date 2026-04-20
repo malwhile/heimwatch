@@ -144,47 +144,43 @@ impl NetworkCollector {
         Ok(records)
     }
 
-    /// Run the network collection loop as a blocking task.
+    /// Run the network collection loop.
     ///
-    /// This method runs in `spawn_blocking` and polls for network metrics at the specified interval.
-    /// Sends CollectorEvents through the provided channel. Monitors the shutdown signal and exits when true.
-    pub fn run(
+    /// Polls for network metrics at the specified interval using tokio::select!
+    /// Sends CollectorEvents through the provided channel. Exits when shutdown signal triggers.
+    pub async fn run(
         mut self,
         tx: mpsc::Sender<CollectorEvent>,
-        shutdown: watch::Receiver<bool>,
+        mut shutdown: watch::Receiver<bool>,
         interval: Duration,
     ) -> Result<()> {
+        let mut ticker = tokio::time::interval(interval);
+
         loop {
-            // Check shutdown before sleeping
-            if *shutdown.borrow() {
-                log::debug!("Network collector received shutdown signal");
-                break;
-            }
-
-            std::thread::sleep(interval);
-
-            // Check shutdown after sleeping
-            if *shutdown.borrow() {
-                log::debug!("Network collector received shutdown signal (after sleep)");
-                break;
-            }
-
-            // Collect network metrics
-            for record in self.collect_network()? {
-                if let MetricPayload::Net(_) = &record.payload {
-                    // Send the complete network record as a single event
-                    let event = CollectorEvent {
-                        app_name: record.app_name.clone(),
-                        payload: record.payload,
-                        timestamp: record.timestamp,
-                    };
-                    if let Err(e) = tx.blocking_send(event) {
-                        log::error!(
-                            "Failed to send network event for app '{}': {}",
-                            record.app_name,
-                            e
-                        );
+            tokio::select! {
+                _ = ticker.tick() => {
+                    // Collect network metrics
+                    for record in self.collect_network()? {
+                        if let MetricPayload::Net(_) = &record.payload {
+                            let event = CollectorEvent {
+                                app_name: record.app_name.clone(),
+                                payload: record.payload,
+                                timestamp: record.timestamp,
+                            };
+                            if let Err(e) = tx.send(event).await {
+                                log::error!(
+                                    "Failed to send network event for app '{}': {}",
+                                    record.app_name,
+                                    e
+                                );
+                            }
+                        }
                     }
+                }
+
+                _ = shutdown.changed() => {
+                    log::debug!("Network collector received shutdown signal");
+                    break;
                 }
             }
         }

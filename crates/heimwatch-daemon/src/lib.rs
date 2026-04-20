@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, watch};
 /// - Collectors send `CollectorEvent`s through a shared mpsc channel
 /// - The daemon owns the only receiver and writes all events to the database
 /// - Shutdown is broadcast via `watch::channel` to all collectors
-/// - Focus collector runs as an async task; network runs in spawn_blocking
+/// - All collectors run as async tasks with event-driven coordination via tokio::select!
 ///
 /// # Errors
 /// Returns an error if:
@@ -57,13 +57,13 @@ pub async fn run(poll_interval: Duration, db_path: &str) -> Result<()> {
         log::debug!("Focus tracking unavailable on this platform");
     }
 
-    // Spawn network collector (blocking task)
+    // Spawn network collector (async task)
     if let Some(nc) = collector.take_network_collector() {
         log::info!("Network collection active");
         let tx = event_tx.clone();
         let shutdown = shutdown_tx.subscribe();
-        tokio::task::spawn_blocking(move || {
-            if let Err(e) = nc.run(tx, shutdown, poll_interval) {
+        tokio::spawn(async move {
+            if let Err(e) = nc.run(tx, shutdown, poll_interval).await {
                 log::error!("Network collection error: {}", e);
             }
         });

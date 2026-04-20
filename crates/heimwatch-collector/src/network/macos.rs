@@ -28,7 +28,7 @@ impl NetworkCollector {
     }
 
     /// Run the network collection loop (stub).
-    pub fn run(
+    pub async fn run(
         self,
         _tx: mpsc::Sender<CollectorEvent>,
         _shutdown: watch::Receiver<bool>,
