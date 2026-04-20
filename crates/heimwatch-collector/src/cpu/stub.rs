@@ -1,7 +1,7 @@
 //! Stub CPU collector for non-Linux platforms.
 
 /// Poll interval for CPU usage collection (5 seconds).
-pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+pub const _POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
