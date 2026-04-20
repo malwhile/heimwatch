@@ -5,7 +5,9 @@
 
 use crate::error::CollectorError;
 use anyhow::Result;
-use heimwatch_core::MetricRecord;
+use heimwatch_core::{CollectorEvent, MetricRecord};
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
 
 /// Stub NetworkCollector for Windows.
 /// Not yet implemented; returns empty results.
@@ -15,11 +17,23 @@ impl NetworkCollector {
     /// Create a new NetworkCollector for Windows.
     /// Currently unimplemented; use ETW or WMI in the future.
     pub fn new() -> Result<Self> {
-        Err(CollectorError::PlatformNotSupported("Windows".to_string()).into())
+        Err(anyhow::anyhow!(CollectorError::PlatformNotSupported(
+            "Windows network collection not yet implemented".to_string()
+        )))
     }
 
     /// Collect network metrics (stub).
     pub fn collect_network(&mut self) -> Result<Vec<MetricRecord>> {
         Ok(Vec::new())
+    }
+
+    /// Run the network collection loop (stub).
+    pub async fn run(
+        self,
+        _tx: mpsc::Sender<CollectorEvent>,
+        _shutdown: watch::Receiver<bool>,
+        _interval: Duration,
+    ) -> Result<()> {
+        Ok(())
     }
 }

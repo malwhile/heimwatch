@@ -11,9 +11,12 @@ use aya::Ebpf;
 use aya::maps::HashMap as AyaHashMap;
 use aya::programs::KProbe;
 use heimwatch_core::{
-    MetricPayload, MetricRecord, NetworkData, current_unix_timestamp, process::get_process_name,
+    CollectorEvent, MetricPayload, MetricRecord, NetworkData, current_unix_timestamp,
+    process::get_process_name,
 };
 use heimwatch_ebpf_common::PidNetStats;
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
 
 /// Local Pod-compatible mirror of PidNetStats.
 ///
@@ -139,6 +142,50 @@ impl NetworkCollector {
         self.prev_state = current_by_app;
 
         Ok(records)
+    }
+
+    /// Run the network collection loop.
+    ///
+    /// Polls for network metrics at the specified interval using tokio::select!
+    /// Sends CollectorEvents through the provided channel. Exits when shutdown signal triggers.
+    pub async fn run(
+        mut self,
+        tx: mpsc::Sender<CollectorEvent>,
+        mut shutdown: watch::Receiver<bool>,
+        interval: Duration,
+    ) -> Result<()> {
+        let mut ticker = tokio::time::interval(interval);
+
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    // Collect network metrics
+                    for record in self.collect_network()? {
+                        if let MetricPayload::Net(_) = &record.payload {
+                            let event = CollectorEvent {
+                                app_name: record.app_name.clone(),
+                                payload: record.payload,
+                                timestamp: record.timestamp,
+                            };
+                            if let Err(e) = tx.send(event).await {
+                                log::error!(
+                                    "Failed to send network event for app '{}': {}",
+                                    record.app_name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                _ = shutdown.changed() => {
+                    log::debug!("Network collector received shutdown signal");
+                    break;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

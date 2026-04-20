@@ -6,28 +6,38 @@
 
 pub mod error;
 pub mod focus;
-mod network;
+pub mod network;
 
 use anyhow::Result;
 pub use error::CollectorError;
 pub use focus::FocusCollector;
-use heimwatch_core::{Collector, MetricRecord};
-use network::NetworkCollector;
+pub use network::NetworkCollector;
 
 /// Unified collector that delegates to platform-specific collectors.
 ///
-/// This struct implements the `Collector` trait and coordinates data collection
-/// across different metric types (network, power, focus, system metrics).
-/// Platform-specific implementations are selected at compile time.
+/// This struct is a factory for platform-specific collectors. The daemon extracts
+/// each collector and runs them as independent async/blocking tasks, sending
+/// CollectorEvents through a shared channel.
 pub struct PlatformCollector {
-    network: NetworkCollector,
+    network: Option<NetworkCollector>,
     focus_collector: Option<FocusCollector>,
 }
 
 impl PlatformCollector {
     /// Initialize the platform collector with OS-specific implementations.
     pub fn new() -> Result<Self> {
-        let network = NetworkCollector::new()?;
+        let network = match NetworkCollector::new() {
+            Ok(nc) => Some(nc),
+            Err(e) => {
+                // Log the error to distinguish between platform unavailability and initialization failure
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("Network collection not available: {}", e);
+                } else {
+                    log::warn!("Network collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
         let focus_collector = FocusCollector::try_new();
 
         Ok(PlatformCollector {
@@ -43,10 +53,12 @@ impl PlatformCollector {
     pub fn take_focus_collector(&mut self) -> Option<FocusCollector> {
         self.focus_collector.take()
     }
-}
 
-impl Collector for PlatformCollector {
-    fn collect_network(&mut self) -> Result<Vec<MetricRecord>> {
-        self.network.collect_network()
+    /// Extracts the network collector for spawning as an independent blocking task.
+    ///
+    /// This is used by the daemon to run network collection in a separate spawn_blocking task
+    /// (since network collection uses eBPF which is not Send on Linux).
+    pub fn take_network_collector(&mut self) -> Option<NetworkCollector> {
+        self.network.take()
     }
 }

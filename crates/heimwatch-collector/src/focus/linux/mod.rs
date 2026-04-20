@@ -8,12 +8,10 @@ mod dbuslib;
 mod wlrlib;
 
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 
-use heimwatch_core::current_unix_timestamp;
-use heimwatch_storage::StorageLayer;
+use heimwatch_core::{CollectorEvent, FocusData, MetricPayload, current_unix_timestamp};
 
 /// Per-toplevel state accumulated between protocol events.
 pub struct ToplevelInfo {
@@ -65,11 +63,11 @@ impl FocusCollector {
 
     /// Runs the focus tracking event loop.
     ///
-    /// Listens for focus-change events and persists elapsed time to storage.
+    /// Listens for focus-change events and sends CollectorEvents to the daemon.
     /// Respects the shutdown signal and flushes the current session on exit.
     pub async fn run(
         &self,
-        storage: Arc<StorageLayer>,
+        tx: mpsc::Sender<CollectorEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let (event_tx, event_rx) = mpsc::channel::<Option<String>>(100);
@@ -78,11 +76,13 @@ impl FocusCollector {
         let mut listener_handle = match &self.source {
             FocusSource::WlrToplevel => {
                 let tx = event_tx.clone();
-                tokio::task::spawn_blocking(move || wlrlib::spawn_wlr_toplevel_listener(tx))
+                let shutdown_clone = shutdown.clone();
+                tokio::spawn(wlrlib::spawn_wlr_toplevel_listener(tx, shutdown_clone))
             }
             FocusSource::GnomeDbus => {
                 let tx = event_tx.clone();
-                tokio::spawn(dbuslib::spawn_gnome_dbus_listener(tx))
+                let shutdown_clone = shutdown.clone();
+                tokio::spawn(dbuslib::spawn_gnome_dbus_listener(tx, shutdown_clone))
             }
         };
 
@@ -109,7 +109,10 @@ impl FocusCollector {
                     if let Some(prev_app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp()?;
-                        storage.insert_focus_event(prev_app, elapsed_ms, timestamp)?;
+                        let event = create_focus_event(prev_app.clone(), elapsed_ms, timestamp);
+                        if let Err(e) = tx.send(event).await {
+                            log::error!("Failed to send focus event for app '{}': {}", prev_app, e);
+                        }
                     }
 
                     // Update current focus
@@ -122,7 +125,10 @@ impl FocusCollector {
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp()?;
-                        storage.insert_focus_event(app, elapsed_ms, timestamp)?;
+                        let event = create_focus_event(app.clone(), elapsed_ms, timestamp);
+                        if let Err(e) = tx.send(event).await {
+                            log::warn!("Failed to send final focus event on shutdown: {}", e);
+                        }
                     }
                     break;
                 }
@@ -133,7 +139,10 @@ impl FocusCollector {
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp().unwrap_or(0);
-                        let _ = storage.insert_focus_event(app, elapsed_ms, timestamp);
+                        let event = create_focus_event(app.clone(), elapsed_ms, timestamp);
+                        if let Err(e) = tx.send(event).await {
+                            log::warn!("Failed to send final focus event after listener failure: {}", e);
+                        }
                     }
                     break;
                 }
@@ -162,6 +171,18 @@ fn normalize_app_id(raw: Option<String>) -> String {
             s
         })
         .unwrap_or_else(|| "Unknown".to_string())
+}
+
+/// Create a focus event with the given app, elapsed time, and timestamp.
+fn create_focus_event(app_name: String, elapsed_ms: u64, timestamp: u64) -> CollectorEvent {
+    CollectorEvent {
+        app_name: app_name.clone(),
+        payload: MetricPayload::Foc(FocusData {
+            app_id: app_name,
+            duration_ms: elapsed_ms,
+        }),
+        timestamp,
+    }
 }
 
 #[cfg(test)]
@@ -205,5 +226,60 @@ mod tests {
             normalize_app_id(Some("org.gnome.Nautilus".to_string())),
             "org.gnome.Nautilus"
         );
+    }
+
+    #[test]
+    fn test_create_focus_event_structure() {
+        let app_name = "firefox".to_string();
+        let elapsed_ms = 5000u64;
+        let timestamp = 1234567890u64;
+
+        let event = create_focus_event(app_name.clone(), elapsed_ms, timestamp);
+
+        assert_eq!(event.app_name, "firefox");
+        assert_eq!(event.timestamp, 1234567890);
+
+        // Verify the payload is FocusData with correct values
+        match event.payload {
+            MetricPayload::Foc(data) => {
+                assert_eq!(data.app_id, "firefox");
+                assert_eq!(data.duration_ms, 5000);
+            }
+            _ => panic!("Expected FocusData payload"),
+        }
+    }
+
+    #[test]
+    fn test_create_focus_event_consistency() {
+        // Verify that the same inputs always produce the same event structure
+        let event1 = create_focus_event("chrome".to_string(), 3000, 999);
+        let event2 = create_focus_event("chrome".to_string(), 3000, 999);
+
+        assert_eq!(event1.app_name, event2.app_name);
+        assert_eq!(event1.timestamp, event2.timestamp);
+
+        match (&event1.payload, &event2.payload) {
+            (MetricPayload::Foc(d1), MetricPayload::Foc(d2)) => {
+                assert_eq!(d1.app_id, d2.app_id);
+                assert_eq!(d1.duration_ms, d2.duration_ms);
+            }
+            _ => panic!("Both should have FocusData payload"),
+        }
+    }
+
+    #[test]
+    fn test_create_focus_event_with_different_apps() {
+        let firefox_event = create_focus_event("firefox".to_string(), 1000, 100);
+        let chrome_event = create_focus_event("chrome".to_string(), 2000, 200);
+
+        assert_ne!(firefox_event.app_name, chrome_event.app_name);
+
+        match (&firefox_event.payload, &chrome_event.payload) {
+            (MetricPayload::Foc(f), MetricPayload::Foc(c)) => {
+                assert_eq!(f.duration_ms, 1000);
+                assert_eq!(c.duration_ms, 2000);
+            }
+            _ => panic!("Both should have FocusData payload"),
+        }
     }
 }

@@ -2,9 +2,8 @@
 
 use anyhow::{Result, anyhow};
 use heimwatch_collector::PlatformCollector;
-use heimwatch_core::{Collector, MetricPayload, current_unix_timestamp};
+use heimwatch_core::{MetricPayload, current_unix_timestamp};
 use heimwatch_storage::StorageLayer;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Capture a snapshot of metrics (network or focus) and print results.
@@ -38,21 +37,19 @@ async fn run_network_snapshot(window_secs: u64, format: &str) -> Result<()> {
     log::info!("Attaching eBPF probes, observing for {}s...", window_secs);
 
     // PlatformCollector::new() blocks on eBPF FD setup
-    let collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
-    let collector = Arc::new(Mutex::new(collector));
+    let mut collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
+
+    // Extract the network collector
+    let mut network_collector = collector
+        .take_network_collector()
+        .ok_or_else(|| anyhow::anyhow!("Network collection unavailable on this platform"))?;
 
     // Wait for traffic to accumulate in the BPF map
     tokio::time::sleep(Duration::from_secs(window_secs)).await;
 
     // Collect: first call returns bytes since probe attachment
-    let records = {
-        let col = Arc::clone(&collector);
-        tokio::task::spawn_blocking(move || {
-            let mut collector = col.lock().unwrap_or_else(|p| p.into_inner());
-            collector.collect_network()
-        })
-        .await??
-    };
+    let records =
+        tokio::task::spawn_blocking(move || network_collector.collect_network()).await??;
 
     // Format and output results
     match format {

@@ -1,10 +1,9 @@
 //! Stub focus collector for non-Linux platforms.
 
 use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
-use heimwatch_storage::StorageLayer;
+use heimwatch_core::CollectorEvent;
 
 /// Placeholder collector for macOS, Windows, etc.
 pub struct FocusCollector;
@@ -17,7 +16,7 @@ impl FocusCollector {
 
     pub async fn run(
         &self,
-        _storage: Arc<StorageLayer>,
+        _tx: mpsc::Sender<CollectorEvent>,
         mut _shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         anyhow::bail!("Not yet implemented")
