@@ -2,7 +2,7 @@
 //!
 //! # Capabilities Required
 //!
-//! For network monitoring on Linux (eBPF), the daemon needs:
+//! For network monitoring and CPU tracking on Linux (eBPF), the daemon needs:
 //!
 //! ```bash
 //! sudo setcap cap_bpf,cap_perfmon+ep ./target/release/heimwatch-daemon
@@ -13,7 +13,6 @@
 use clap::{Parser, Subcommand};
 use heimwatch_daemon::logging::{LogConfig, init_logging, parse_level};
 use heimwatch_daemon::{run, snapshot};
-use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(name = "heimwatch-daemon")]
@@ -31,10 +30,6 @@ struct Args {
 enum Command {
     /// Run as a continuous background daemon
     Daemon {
-        /// Poll interval in seconds
-        #[arg(short, long, default_value = "5")]
-        interval: u64,
-
         /// Database path (sled)
         #[arg(short, long, default_value = "./heimwatch.db")]
         db: String,
@@ -46,6 +41,16 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum SnapshotCommand {
+    /// One-shot CPU usage snapshot (attaches eBPF sched_switch probe)
+    Cpu {
+        /// Observation window in seconds (probe attaches, CPU time accumulates, then collect)
+        #[arg(short, long, default_value = "5")]
+        window: u64,
+
+        /// Output format: text (human-readable) or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
     /// One-shot network traffic snapshot (attaches eBPF probes)
     Network {
         /// Observation window in seconds (probes attach, traffic accumulates, then collect)
@@ -82,16 +87,14 @@ async fn main() -> anyhow::Result<()> {
     init_logging(log_config)?;
 
     match args.command {
-        Command::Daemon { interval, db } => {
-            log::info!(
-                "Heimwatch daemon starting with poll_interval={}s, db={}",
-                interval,
-                db
-            );
-            let poll_interval = Duration::from_secs(interval);
-            run(poll_interval, &db).await?;
+        Command::Daemon { db } => {
+            log::info!("Heimwatch daemon starting with db={}", db);
+            run(&db).await?;
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
+            SnapshotCommand::Cpu { window, format } => {
+                snapshot::run_snapshot(window, &format, "cpu", None).await?;
+            }
             SnapshotCommand::Network { window, format } => {
                 snapshot::run_snapshot(window, &format, "network", None).await?;
             }

@@ -1,7 +1,7 @@
-//! Platform-specific network collectors.
+//! Platform-specific CPU collectors.
 //!
-//! This module selects the appropriate network collector based on the target OS.
-//! Currently only Linux is fully implemented with eBPF-based monitoring.
+//! This module selects the appropriate CPU collector based on the target OS.
+//! Currently only Linux is fully implemented with eBPF-based sched_switch monitoring.
 //! macOS and Windows have stub implementations for future development.
 
 #[cfg(target_os = "linux")]
@@ -13,8 +13,8 @@ mod windows;
 
 // Export the appropriate collector for the current platform
 #[cfg(target_os = "linux")]
-pub use linux::{NetworkCollector, POLL_INTERVAL};
+pub use linux::{CpuCollector, POLL_INTERVAL};
 #[cfg(target_os = "macos")]
-pub use macos::NetworkCollector;
+pub use macos::{CpuCollector, POLL_INTERVAL};
 #[cfg(target_os = "windows")]
-pub use windows::NetworkCollector;
+pub use windows::{CpuCollector, POLL_INTERVAL};

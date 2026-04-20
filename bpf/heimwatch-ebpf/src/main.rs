@@ -2,13 +2,13 @@
 #![no_main]
 
 use aya_ebpf::{
-    helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid},
-    macros::{kprobe, kretprobe, map},
+    helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns},
+    macros::{kprobe, kretprobe, map, tracepoint},
     maps::HashMap,
-    programs::{ProbeContext, RetProbeContext},
+    programs::{ProbeContext, RetProbeContext, TracePointContext},
 };
 use aya_log_ebpf::warn;
-use heimwatch_ebpf_common::PidNetStats;
+use heimwatch_ebpf_common::{PidNetStats, PidCpuStats};
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -21,6 +21,11 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 /// User-space collector handles missing PIDs gracefully.
 #[map]
 static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(10_240, 0);
+
+/// BPF map: key = PID (u32), value = PidCpuStats (cpu_time_ns, last_sched_in_ns, comm)
+/// Max 10,240 entries (~120 KB). Tracks cumulative CPU time per process via sched_switch.
+#[map]
+static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(10_240, 0);
 
 /// Attached to tcp_sendmsg. Size is passed directly as arg 2.
 ///
@@ -120,6 +125,75 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
             // Log to kernel trace buffer if insertion fails.
             if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
                 warn!(ctx, "NETWORK_STATS map full");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Attached to sched:sched_switch tracepoint.
+///
+/// Fires on every context switch. At this point, bpf_get_current_pid_tgid() returns
+/// the process being switched off (prev). We read next_pid from the tracepoint context.
+///
+/// sched_switch tracepoint memory layout (stable since kernel 4.4):
+///   offset  0: u64       common header
+///   offset  8: [u8; 16]  prev_comm
+///   offset 24: u32       prev_pid
+///   offset 28: i32       prev_prio
+///   offset 32: i64       prev_state
+///   offset 40: [u8; 16]  next_comm
+///   offset 56: u32       next_pid
+///
+/// Before production deployment, verify these offsets on the target system:
+///   cat /sys/kernel/debug/tracing/events/sched/sched_switch/format
+#[tracepoint(name = "sched_switch", category = "sched")]
+pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
+    match try_sched_switch(&ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
+    let now_ns = unsafe { bpf_ktime_get_ns() };
+
+    // Read prev_pid and next_pid from tracepoint context
+    let prev_pid: u32 = unsafe { ctx.read_at(24)? };
+    let next_pid: u32 = unsafe { ctx.read_at(56)? };
+
+    // --- Handle sched-out for prev_pid: accumulate cpu_time_ns ---
+    if let Some(s) = CPU_STATS.get_ptr_mut(&prev_pid) {
+        unsafe {
+            let last_in = (*s).last_sched_in_ns;
+            if last_in > 0 {
+                // Process was on-CPU from last_in to now; add delta
+                let delta = now_ns.saturating_sub(last_in);
+                (*s).cpu_time_ns = (*s).cpu_time_ns.saturating_add(delta);
+            }
+            // Mark as off-CPU
+            (*s).last_sched_in_ns = 0;
+        }
+    }
+
+    // --- Handle sched-in for next_pid: stamp the start time ---
+    match CPU_STATS.get_ptr_mut(&next_pid) {
+        Some(s) => {
+            // Process already tracked; just update the sched-in timestamp
+            unsafe { (*s).last_sched_in_ns = now_ns }
+        }
+        None => {
+            // First time we see this PID; capture its comm and initialize
+            let comm: [u8; 16] = unsafe { ctx.read_at(40).unwrap_or([0u8; 16]) };
+            let new_stats = PidCpuStats {
+                cpu_time_ns: 0,
+                last_sched_in_ns: now_ns,
+                comm,
+            };
+            if CPU_STATS.insert(&next_pid, &new_stats, 0).is_err() {
+                warn!(ctx, "CPU_STATS map full");
             }
         }
     }

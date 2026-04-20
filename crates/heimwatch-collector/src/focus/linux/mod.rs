@@ -4,6 +4,9 @@
 //! protocol or falls back to GNOME D-Bus signals. Tracks elapsed time in memory
 //! and persists focus sessions to the storage layer on focus-change events.
 
+/// Event-driven collector (no polling interval needed). Kept for consistency with other collectors.
+pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(0);
+
 mod dbuslib;
 mod wlrlib;
 

@@ -3,6 +3,9 @@
 //! Requires: CAP_BPF + CAP_PERFMON or root (Linux 5.8+)
 //! Uses: aya framework for eBPF program loading and kprobe attachment
 
+/// Poll interval for network traffic collection (5 seconds).
+pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
+
 use crate::error::CollectorError;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -146,15 +149,14 @@ impl NetworkCollector {
 
     /// Run the network collection loop.
     ///
-    /// Polls for network metrics at the specified interval using tokio::select!
+    /// Polls for network metrics at the configured interval using tokio::select!
     /// Sends CollectorEvents through the provided channel. Exits when shutdown signal triggers.
     pub async fn run(
         mut self,
         tx: mpsc::Sender<CollectorEvent>,
         mut shutdown: watch::Receiver<bool>,
-        interval: Duration,
     ) -> Result<()> {
-        let mut ticker = tokio::time::interval(interval);
+        let mut ticker = tokio::time::interval(POLL_INTERVAL);
 
         loop {
             tokio::select! {

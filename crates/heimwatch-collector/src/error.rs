@@ -45,6 +45,10 @@ pub enum CollectorError {
     /// Network collector initialization failed (e.g., missing eBPF capabilities).
     #[error("network collector initialization failed: {0}")]
     NetworkInitializationFailed(String),
+
+    /// CPU collector initialization failed (e.g., missing eBPF capabilities).
+    #[error("CPU collector initialization failed: {0}")]
+    CpuInitializationFailed(String),
 }
 
 #[cfg(target_os = "linux")]
