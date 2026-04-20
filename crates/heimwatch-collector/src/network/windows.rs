@@ -17,7 +17,9 @@ impl NetworkCollector {
     /// Create a new NetworkCollector for Windows.
     /// Currently unimplemented; use ETW or WMI in the future.
     pub fn new() -> Result<Self> {
-        Err(CollectorError::PlatformNotSupported("Windows".to_string()).into())
+        Err(anyhow::anyhow!(
+            CollectorError::PlatformNotSupported("Windows network collection not yet implemented".to_string())
+        ))
     }
 
     /// Collect network metrics (stub).

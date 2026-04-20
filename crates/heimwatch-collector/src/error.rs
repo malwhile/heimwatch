@@ -41,6 +41,10 @@ pub enum CollectorError {
     /// Focus tracking unavailable on this compositor.
     #[error("focus tracking unavailable: no supported compositor found")]
     FocusUnavailable,
+
+    /// Network collector initialization failed (e.g., missing eBPF capabilities).
+    #[error("network collector initialization failed: {0}")]
+    NetworkInitializationFailed(String),
 }
 
 #[cfg(target_os = "linux")]

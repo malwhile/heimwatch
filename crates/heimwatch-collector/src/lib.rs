@@ -26,7 +26,18 @@ pub struct PlatformCollector {
 impl PlatformCollector {
     /// Initialize the platform collector with OS-specific implementations.
     pub fn new() -> Result<Self> {
-        let network = NetworkCollector::new().ok();
+        let network = match NetworkCollector::new() {
+            Ok(nc) => Some(nc),
+            Err(e) => {
+                // Log the error to distinguish between platform unavailability and initialization failure
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("Network collection not available: {}", e);
+                } else {
+                    log::warn!("Network collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
         let focus_collector = FocusCollector::try_new();
 
         Ok(PlatformCollector {
