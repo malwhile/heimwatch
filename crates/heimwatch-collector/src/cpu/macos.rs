@@ -21,9 +21,7 @@ impl CpuCollector {
     /// Currently unimplemented; use DTrace or system call tracing in the future.
     pub fn new() -> Result<Self> {
         log::warn!("CPU tracking not yet implemented on macOS");
-        Err(anyhow::anyhow!(
-            "CPU tracking not yet implemented on macOS"
-        ))
+        Err(anyhow::anyhow!("CPU tracking not yet implemented on macOS"))
     }
 
     /// Collect CPU metrics (stub).
