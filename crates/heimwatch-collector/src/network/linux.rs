@@ -179,7 +179,11 @@ impl NetworkCollector {
                         timestamp: record.timestamp,
                     };
                     if let Err(e) = tx.blocking_send(event) {
-                        log::error!("Failed to send network event for app '{}': {}", record.app_name, e);
+                        log::error!(
+                            "Failed to send network event for app '{}': {}",
+                            record.app_name,
+                            e
+                        );
                     }
                 }
             }

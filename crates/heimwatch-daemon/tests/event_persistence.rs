@@ -117,11 +117,7 @@ async fn test_event_channel_multiple_senders() {
 #[tokio::test]
 async fn test_collector_event_timestamps() {
     // Test that events preserve their timestamps
-    let timestamps = vec![
-        1234567890u64,
-        1234567900u64,
-        1234567910u64,
-    ];
+    let timestamps = vec![1234567890u64, 1234567900u64, 1234567910u64];
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CollectorEvent>(10);
 
