@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
@@ -60,8 +60,12 @@ pub struct WlrToplevelState {
     tx: mpsc::Sender<Option<String>>,
 }
 
-/// Spawns a blocking task to listen for Wayland wlr-foreign-toplevel events.
-pub fn spawn_wlr_toplevel_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
+/// Spawns an async task to listen for Wayland wlr-foreign-toplevel events.
+pub async fn spawn_wlr_toplevel_listener(
+    tx: mpsc::Sender<Option<String>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    // Setup happens on the async context first
     let conn =
         Connection::connect_to_env().map_err(|e| anyhow!("Wayland connection failed: {}", e))?;
 
@@ -80,11 +84,26 @@ pub fn spawn_wlr_toplevel_listener(tx: mpsc::Sender<Option<String>>) -> Result<(
         tx,
     };
 
-    // Main event loop (blocking, suitable for spawn_blocking)
-    loop {
-        event_queue
-            .blocking_dispatch(&mut state)
-            .map_err(|e| anyhow!("Wayland dispatch error: {}", e))?;
+    // Wait for either the blocking event loop to finish or shutdown signal
+    tokio::select! {
+        result = tokio::task::spawn_blocking(move || {
+            loop {
+                event_queue
+                    .blocking_dispatch(&mut state)
+                    .map_err(|e| anyhow!("Wayland dispatch error: {}", e))?;
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), anyhow::Error>(())
+        }) => {
+            result
+                .map_err(|e| anyhow!("Task join error: {}", e))?
+                .map_err(|e| anyhow!("Wayland error: {}", e))
+        }
+
+        Ok(_) = shutdown.changed() => {
+            log::debug!("WLR listener received shutdown signal");
+            Ok(())
+        }
     }
 }
 

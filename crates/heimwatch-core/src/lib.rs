@@ -8,6 +8,21 @@ pub use metrics::*;
 
 use anyhow::{Context as _, Result};
 
+/// Unified event type for all collectors to communicate resource usage to the daemon.
+///
+/// Each collector sends `CollectorEvent` through a shared channel instead of directly
+/// writing to the database. The collector constructs the appropriate `MetricPayload`,
+/// keeping database logic centralized in the daemon while ensuring type safety.
+#[derive(Debug, Clone)]
+pub struct CollectorEvent {
+    /// Application name (e.g., "firefox", "code", "Unknown")
+    pub app_name: String,
+    /// The metric payload (type-safe, constructed by the collector)
+    pub payload: MetricPayload,
+    /// Unix epoch timestamp (seconds)
+    pub timestamp: u64,
+}
+
 /// OS Abstraction Trait for Data Collection
 /// Implement this for each target platform (Linux, macOS, Windows, BSD)
 pub trait Collector {

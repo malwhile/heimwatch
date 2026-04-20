@@ -1,45 +1,23 @@
-//! Heimwatch daemon: polling loop that feeds network metrics into storage.
+//! Heimwatch daemon: event-driven architecture with unified collector interface.
 
 pub mod logging;
 pub mod snapshot;
 
 use anyhow::Result;
 use heimwatch_collector::PlatformCollector;
-use heimwatch_core::Collector;
+use heimwatch_core::CollectorEvent;
 use heimwatch_storage::StorageLayer;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
-use tokio::time::interval;
-
-#[derive(strum_macros::Display)]
-enum CollectLabel {
-    Collection,
-    Final,
-}
-
-impl CollectLabel {
-    pub fn get_log_level(&self) -> log::Level {
-        match self {
-            CollectLabel::Collection => log::Level::Debug,
-            CollectLabel::Final => log::Level::Info,
-        }
-    }
-}
+use tokio::sync::{mpsc, watch};
 
 /// Run the heimwatch daemon with the specified poll interval and database path.
 ///
-/// # Prerequisites
-/// - Logging must be initialized before calling this function (via `logging::init_logging()`)
-///
-/// # Design
-/// - Initializes `PlatformCollector` once at startup (wrapped in Mutex for interior mutability)
-/// - Main loop uses `tokio::select!` to handle:
-///   - Periodic collection via `tokio::time::interval` (triggers collection tick)
-///   - OS shutdown signals (Ctrl+C)
-/// - Collector runs in `tokio::task::spawn_blocking` for BPF (not Send)
-/// - Storage writes also use `spawn_blocking` (sled is synchronous)
-/// - Single collector instance shared across all collections via Arc<Mutex<>>
+/// # Architecture
+/// - Collectors send `CollectorEvent`s through a shared mpsc channel
+/// - The daemon owns the only receiver and writes all events to the database
+/// - Shutdown is broadcast via `watch::channel` to all collectors
+/// - Focus collector runs as an async task; network runs in spawn_blocking
 ///
 /// # Errors
 /// Returns an error if:
@@ -52,115 +30,87 @@ pub async fn run(poll_interval: Duration, db_path: &str) -> Result<()> {
         db_path
     );
 
-    // Initialize storage layer (shared across all tasks)
+    // Initialize storage layer
     let storage = Arc::new(StorageLayer::open(db_path)?);
 
-    // Initialize collector (must be in blocking context due to BPF fds not being Send)
-    // Wrap in Arc<Mutex> for shared mutable access from blocking tasks
-    let collector = Arc::new(Mutex::new(PlatformCollector::new()?));
+    // Create the unified event channel
+    let (event_tx, mut event_rx) = mpsc::channel::<CollectorEvent>(256);
+
+    // Create the shutdown broadcast
+    let (shutdown_tx, _) = watch::channel(false);
+
+    // Initialize collectors
+    let mut collector = PlatformCollector::new()?;
     log::debug!("PlatformCollector initialized successfully");
 
-    // Initialize shutdown signal broadcaster (used by focus task and other spawned tasks)
-    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
-
-    // Extract and spawn the focus collector (event-driven, runs independently of the poll loop)
-    {
-        let mut collector_guard = lock_collector(&collector);
-        let focus_collector = collector_guard.take_focus_collector();
-        drop(collector_guard); // Release mutex early
-
-        if let Some(fc) = focus_collector {
-            log::info!("Focus tracking active");
-            let storage_fc = Arc::clone(&storage);
-            let shutdown_rx = shutdown_tx.subscribe();
-            tokio::spawn(async move {
-                if let Err(e) = fc.run(storage_fc, shutdown_rx).await {
-                    log::error!("Focus tracking error: {}", e);
-                }
-            });
-        } else {
-            log::warn!("Focus tracking unavailable on this compositor");
-        }
+    // Spawn focus collector (async task)
+    if let Some(fc) = collector.take_focus_collector() {
+        log::info!("Focus tracking active");
+        let tx = event_tx.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            if let Err(e) = fc.run(tx, shutdown).await {
+                log::error!("Focus tracking error: {}", e);
+            }
+        });
+    } else {
+        log::debug!("Focus tracking unavailable on this platform");
     }
 
-    // Set up periodic collection timer
-    let mut collect_interval = interval(poll_interval);
-    collect_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Spawn network collector (blocking task)
+    if let Some(nc) = collector.take_network_collector() {
+        log::info!("Network collection active");
+        let tx = event_tx.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = nc.run(tx, shutdown, poll_interval) {
+                log::error!("Network collection error: {}", e);
+            }
+        });
+    } else {
+        log::debug!("Network collection unavailable on this platform");
+    }
 
-    // Main event loop with graceful shutdown
+    // Drop the original event_tx so the channel closes when all collectors exit
+    drop(event_tx);
+
+    // Main event loop: wait for collector events or Ctrl+C
     loop {
         tokio::select! {
-            // Periodic metric collection (triggered by interval)
-            _ = collect_interval.tick() => {
-                collect_and_persist(Arc::clone(&collector), Arc::clone(&storage), CollectLabel::Collection).await;
+            Some(event) = event_rx.recv() => {
+                persist_event(&storage, event)?;
             }
 
-            // Handle OS signals (Ctrl+C)
             _ = tokio::signal::ctrl_c() => {
                 log::info!("Received Ctrl+C, initiating graceful shutdown...");
-                // Signal all tasks (focus, etc.) to shut down
                 let _ = shutdown_tx.send(true);
                 break;
             }
         }
     }
 
-    // Graceful shutdown: one final collection before exiting
-    log::info!("Performing final collection before shutdown...");
-    collect_and_persist(
-        Arc::clone(&collector),
-        Arc::clone(&storage),
-        CollectLabel::Final,
-    )
-    .await;
+    // Drain any remaining events from collectors during shutdown
+    log::info!("Draining final events before exit...");
+    while let Some(event) = event_rx.recv().await {
+        if let Err(e) = persist_event(&storage, event) {
+            log::warn!("Error persisting final event: {}", e);
+        }
+    }
 
     log::info!("Daemon shutdown complete");
     Ok(())
 }
 
-/// Collect network metrics and persist to storage in a blocking task.
-///
-/// # Arguments
-/// * `collector` - Shared collector instance
-/// * `storage` - Shared storage instance
-/// * `label` - Context label for logging ("collection" or "final collection")
-async fn collect_and_persist(
-    collector: Arc<Mutex<PlatformCollector>>,
-    storage: Arc<StorageLayer>,
-    label: CollectLabel,
-) {
-    tokio::task::spawn_blocking(move || {
-        let mut collector = lock_collector(&collector);
-        match collector.collect_network() {
-            Ok(records) => {
-                if !records.is_empty() {
-                    log::log!(
-                        label.get_log_level(),
-                        "{}: {} records",
-                        label,
-                        records.len()
-                    );
+/// Convert a `CollectorEvent` to a `MetricRecord` and persist it.
+fn persist_event(storage: &Arc<StorageLayer>, event: CollectorEvent) -> Result<()> {
+    use heimwatch_core::MetricRecord;
 
-                    if let Err(e) = storage.insert_metrics_batch(&records) {
-                        log::error!("Failed to persist {}: {}", label, e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Error in {}: {}", label, e);
-            }
-        }
-    })
-    .await
-    .ok(); // .await.ok() is safe: all error cases handled inside spawn_blocking closure
-}
+    let record = MetricRecord {
+        app_name: event.app_name,
+        timestamp: event.timestamp,
+        payload: event.payload,
+    };
 
-fn lock_collector(collector: &Arc<Mutex<PlatformCollector>>) -> MutexGuard<'_, PlatformCollector> {
-    match collector.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            log::warn!("Collector mutex poisoned; accepting risk to continue;");
-            poisoned.into_inner()
-        }
-    }
+    storage.insert_metric(&record)?;
+    Ok(())
 }

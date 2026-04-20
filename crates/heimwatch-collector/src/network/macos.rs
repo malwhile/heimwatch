@@ -5,7 +5,9 @@
 
 use crate::error::CollectorError;
 use anyhow::Result;
-use heimwatch_core::MetricRecord;
+use heimwatch_core::{CollectorEvent, MetricRecord};
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
 
 /// Stub NetworkCollector for macOS.
 /// Not yet implemented; returns empty results.
@@ -21,5 +23,15 @@ impl NetworkCollector {
     /// Collect network metrics (stub).
     pub fn collect_network(&mut self) -> Result<Vec<MetricRecord>> {
         Ok(Vec::new())
+    }
+
+    /// Run the network collection loop (stub).
+    pub fn run(
+        self,
+        _tx: mpsc::Sender<CollectorEvent>,
+        _shutdown: watch::Receiver<bool>,
+        _interval: Duration,
+    ) -> Result<()> {
+        Ok(())
     }
 }

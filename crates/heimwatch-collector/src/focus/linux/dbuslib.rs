@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zbus::Connection;
 
 /// Check if GNOME D-Bus is accessible.
@@ -10,34 +10,50 @@ pub fn try_gnome_dbus_available() -> Result<()> {
 }
 
 /// Spawns an async task to listen for GNOME D-Bus window focus signals.
-pub async fn spawn_gnome_dbus_listener(tx: mpsc::Sender<Option<String>>) -> Result<()> {
+pub async fn spawn_gnome_dbus_listener(
+    tx: mpsc::Sender<Option<String>>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
     let conn = Connection::session()
         .await
         .map_err(|e| anyhow!("D-Bus session connection failed: {}", e))?;
 
     // Poll the active window periodically (fallback for GNOME/KDE)
     // This is simpler and more reliable than signal-based tracking
-    poll_active_window(&conn, tx).await
+    poll_active_window(&conn, tx, shutdown).await
 }
 
 /// Poll for active window changes on GNOME or KDE.
-async fn poll_active_window(conn: &Connection, tx: mpsc::Sender<Option<String>>) -> Result<()> {
+async fn poll_active_window(
+    conn: &Connection,
+    tx: mpsc::Sender<Option<String>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
     log::debug!("Starting D-Bus window focus polling");
 
     let mut last_app_id: Option<String> = None;
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
 
     loop {
-        interval.tick().await;
+        tokio::select! {
+            _ = interval.tick() => {
+                let current_app = get_active_window_app(conn).await;
 
-        let current_app = get_active_window_app(conn).await;
+                // Only send if the app changed
+                if current_app != last_app_id {
+                    let _ = tx.send(current_app.clone()).await;
+                    last_app_id = current_app;
+                }
+            }
 
-        // Only send if the app changed
-        if current_app != last_app_id {
-            let _ = tx.send(current_app.clone()).await;
-            last_app_id = current_app;
+            Ok(_) = shutdown.changed() => {
+                log::debug!("D-Bus listener received shutdown signal");
+                break;
+            }
         }
     }
+
+    Ok(())
 }
 
 /// Get the currently active application via D-Bus (GNOME or KDE).

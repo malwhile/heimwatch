@@ -8,12 +8,10 @@ mod dbuslib;
 mod wlrlib;
 
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 
-use heimwatch_core::current_unix_timestamp;
-use heimwatch_storage::StorageLayer;
+use heimwatch_core::{CollectorEvent, FocusData, MetricPayload, current_unix_timestamp};
 
 /// Per-toplevel state accumulated between protocol events.
 pub struct ToplevelInfo {
@@ -65,11 +63,11 @@ impl FocusCollector {
 
     /// Runs the focus tracking event loop.
     ///
-    /// Listens for focus-change events and persists elapsed time to storage.
+    /// Listens for focus-change events and sends CollectorEvents to the daemon.
     /// Respects the shutdown signal and flushes the current session on exit.
     pub async fn run(
         &self,
-        storage: Arc<StorageLayer>,
+        tx: mpsc::Sender<CollectorEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let (event_tx, event_rx) = mpsc::channel::<Option<String>>(100);
@@ -78,11 +76,13 @@ impl FocusCollector {
         let mut listener_handle = match &self.source {
             FocusSource::WlrToplevel => {
                 let tx = event_tx.clone();
-                tokio::task::spawn_blocking(move || wlrlib::spawn_wlr_toplevel_listener(tx))
+                let shutdown_clone = shutdown.clone();
+                tokio::spawn(wlrlib::spawn_wlr_toplevel_listener(tx, shutdown_clone))
             }
             FocusSource::GnomeDbus => {
                 let tx = event_tx.clone();
-                tokio::spawn(dbuslib::spawn_gnome_dbus_listener(tx))
+                let shutdown_clone = shutdown.clone();
+                tokio::spawn(dbuslib::spawn_gnome_dbus_listener(tx, shutdown_clone))
             }
         };
 
@@ -109,7 +109,15 @@ impl FocusCollector {
                     if let Some(prev_app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp()?;
-                        storage.insert_focus_event(prev_app, elapsed_ms, timestamp)?;
+                        tx.send(CollectorEvent {
+                            app_name: prev_app.clone(),
+                            payload: MetricPayload::Foc(FocusData {
+                                app_id: prev_app.clone(),
+                                duration_ms: elapsed_ms,
+                            }),
+                            timestamp,
+                        })
+                        .await?;
                     }
 
                     // Update current focus
@@ -122,7 +130,15 @@ impl FocusCollector {
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp()?;
-                        storage.insert_focus_event(app, elapsed_ms, timestamp)?;
+                        let _ = tx.send(CollectorEvent {
+                            app_name: app.clone(),
+                            payload: MetricPayload::Foc(FocusData {
+                                app_id: app.clone(),
+                                duration_ms: elapsed_ms,
+                            }),
+                            timestamp,
+                        })
+                        .await;
                     }
                     break;
                 }
@@ -133,7 +149,15 @@ impl FocusCollector {
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp().unwrap_or(0);
-                        let _ = storage.insert_focus_event(app, elapsed_ms, timestamp);
+                        let _ = tx.send(CollectorEvent {
+                            app_name: app.clone(),
+                            payload: MetricPayload::Foc(FocusData {
+                                app_id: app.clone(),
+                                duration_ms: elapsed_ms,
+                            }),
+                            timestamp,
+                        })
+                        .await;
                     }
                     break;
                 }

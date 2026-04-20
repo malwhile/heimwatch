@@ -11,9 +11,12 @@ use aya::Ebpf;
 use aya::maps::HashMap as AyaHashMap;
 use aya::programs::KProbe;
 use heimwatch_core::{
-    MetricPayload, MetricRecord, NetworkData, current_unix_timestamp, process::get_process_name,
+    CollectorEvent, MetricPayload, MetricRecord, NetworkData, current_unix_timestamp,
+    process::get_process_name,
 };
 use heimwatch_ebpf_common::PidNetStats;
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
 
 /// Local Pod-compatible mirror of PidNetStats.
 ///
@@ -139,6 +142,47 @@ impl NetworkCollector {
         self.prev_state = current_by_app;
 
         Ok(records)
+    }
+
+    /// Run the network collection loop as a blocking task.
+    ///
+    /// This method runs in `spawn_blocking` and polls for network metrics at the specified interval.
+    /// Sends CollectorEvents through the provided channel. Monitors the shutdown signal and exits when true.
+    pub fn run(
+        mut self,
+        tx: mpsc::Sender<CollectorEvent>,
+        shutdown: watch::Receiver<bool>,
+        interval: Duration,
+    ) -> Result<()> {
+        loop {
+            // Check shutdown before sleeping
+            if *shutdown.borrow() {
+                log::debug!("Network collector received shutdown signal");
+                break;
+            }
+
+            std::thread::sleep(interval);
+
+            // Check shutdown after sleeping
+            if *shutdown.borrow() {
+                log::debug!("Network collector received shutdown signal (after sleep)");
+                break;
+            }
+
+            // Collect network metrics
+            for record in self.collect_network()? {
+                if let MetricPayload::Net(_) = &record.payload {
+                    // Send the complete network record as a single event
+                    let _ = tx.blocking_send(CollectorEvent {
+                        app_name: record.app_name,
+                        payload: record.payload,
+                        timestamp: record.timestamp,
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
