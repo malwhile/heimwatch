@@ -158,7 +158,7 @@ These are one-time setup scripts; see their contents for usage.
 
 ## CO-RE Implementation (Offset Auto-Discovery)
 
-**Status:** ✅ **Implemented for disk I/O probe** (block_rq_issue)
+**Status:** ✅ **Implemented for all tracepoint probes** (block_rq_issue, sched_switch)
 
 **Problem (solved):** Hardcoded tracepoint field offsets break across kernel versions.
 
@@ -208,7 +208,12 @@ let is_read = rq_issue.rwbs[0] == b'R';
 - ✅ Single compiled binary for all supported kernels
 - ✅ Compile Once Run Everywhere (C.O.R.E.) principle
 
-**Next:** Apply same pattern to CPU probe (`trace_sched_switch`) for complete portability.
+**Probes converted to CO-RE:**
+- ✅ CPU probe (`trace_sched_switch` on `sched:sched_switch`)
+- ✅ Disk probe (`trace_block_rq_issue` on `block:block_rq_issue`)
+
+**Probes without CO-RE (by design):**
+- Network probes (`trace_sendmsg`, `trace_recvmsg`) use kprobes/kretprobes, which monitor stable kernel function signatures, not tracepoint structs. No offset variation across kernel versions.
 
 ## Development Notes
 

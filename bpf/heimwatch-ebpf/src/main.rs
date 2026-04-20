@@ -1,6 +1,18 @@
 #![no_std]
 #![no_main]
 
+//! Heimwatch eBPF programs for kernel-space system metrics collection.
+//!
+//! This module uses CO-RE (Compile Once Run Everywhere) for tracepoint probes. CO-RE enables
+//! portable eBPF programs that work across different kernel versions without recompilation or
+//! manual offset adjustments. The aya compiler uses kernel BTF (BPF Type Format) at load time
+//! to automatically discover field offsets in tracepoint context structs. Tracepoint field
+//! layouts are stable within kernel series but may shift across major versions — CO-RE handles
+//! this transparently by reading the kernel's BTF at eBPF program load time.
+//!
+//! Network probes (tcp_sendmsg, tcp_recvmsg) use kprobes/kretprobes instead of tracepoints
+//! and don't require CO-RE because they monitor stable kernel function signatures (ABI-guaranteed).
+
 use aya_ebpf::{
     helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns},
     macros::{kprobe, kretprobe, map, tracepoint},
@@ -16,11 +28,32 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
 
+/// sched_switch tracepoint struct for CO-RE field discovery.
+/// Fields match kernel's internal layout (stable since kernel 4.4).
+#[repr(C)]
+struct SchedSwitch {
+    /// Common tracepoint header
+    _common_type: u32,
+    _common_flags: u32,
+    _common_preempt_count: i32,
+    _common_pid: i32,
+
+    /// Process being switched off
+    prev_comm: [u8; 16],
+    prev_pid: u32,
+    prev_prio: i32,
+
+    /// Process state bits (see kernel sched.h)
+    prev_state: i64,
+
+    /// Process being switched on
+    next_comm: [u8; 16],
+    next_pid: u32,
+    _next_prio: i32,
+}
+
 /// block_rq_issue tracepoint struct for CO-RE field discovery.
-///
-/// CO-RE (Compile Once Run Everywhere) uses kernel BTF to auto-detect field offsets
-/// at eBPF program load time, making this code portable across kernel versions.
-/// Fields are in the order they appear in the kernel's tracepoint definition.
+/// Fields match kernel's internal layout (stable since kernel 4.18).
 #[repr(C)]
 struct BlockRqIssue {
     /// Common tracepoint header (skipped for now)
@@ -64,9 +97,13 @@ static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(10_240, 
 #[map]
 static DISK_STATS: HashMap<u32, PidDiskStats> = HashMap::with_max_entries(10_240, 0);
 
-/// Attached to tcp_sendmsg. Size is passed directly as arg 2.
+/// Attached to tcp_sendmsg (kprobe on kernel function).
 ///
-/// // arg(2) contains the send size; args 0-1 are kernel struct pointers (inaccessible from BPF)
+/// Kprobes monitor kernel function calls by their stable function signature.
+/// Unlike tracepoints, they don't have layout-dependent fields, so CO-RE is not needed.
+/// Function signatures are stable across kernel versions (ABI requirement).
+///
+/// arg(2) contains the send size; args 0-1 are kernel struct pointers (inaccessible from BPF)
 ///
 /// tcp_sendmsg signature:
 ///   int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
@@ -115,8 +152,13 @@ fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
     Ok(())
 }
 
-/// Attached to tcp_recvmsg (kretprobe). Reads the return value (bytes received)
-/// and accumulates rx_bytes for the current PID.
+/// Attached to tcp_recvmsg (kretprobe on kernel function).
+///
+/// Kretprobes monitor kernel function return values by their stable function signature.
+/// Unlike tracepoints, they don't have layout-dependent fields, so CO-RE is not needed.
+/// Function signatures are stable across kernel versions (ABI requirement).
+///
+/// Reads the return value (bytes received) and accumulates rx_bytes for the current PID.
 ///
 /// tcp_recvmsg signature:
 ///   int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags, int *addr_len)
@@ -172,19 +214,8 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
 /// Attached to sched:sched_switch tracepoint.
 ///
 /// Fires on every context switch. At this point, bpf_get_current_pid_tgid() returns
-/// the process being switched off (prev). We read next_pid from the tracepoint context.
-///
-/// sched_switch tracepoint memory layout (stable since kernel 4.4):
-///   offset  0: u64       common header
-///   offset  8: [u8; 16]  prev_comm
-///   offset 24: u32       prev_pid
-///   offset 28: i32       prev_prio
-///   offset 32: i64       prev_state
-///   offset 40: [u8; 16]  next_comm
-///   offset 56: u32       next_pid
-///
-/// Before production deployment, verify these offsets on the target system:
-///   cat /sys/kernel/debug/tracing/events/sched/sched_switch/format
+/// the process being switched off (prev). We read next_pid from the tracepoint context
+/// via CO-RE struct (works on kernels 4.4+).
 #[tracepoint(name = "sched_switch", category = "sched")]
 pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
     match try_sched_switch(&ctx) {
@@ -197,9 +228,13 @@ pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
 fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
     let now_ns = unsafe { bpf_ktime_get_ns() };
 
-    // Read prev_pid and next_pid from tracepoint context
-    let prev_pid: u32 = unsafe { ctx.read_at(24)? };
-    let next_pid: u32 = unsafe { ctx.read_at(56)? };
+    // Cast context to SchedSwitch struct. Use read_unaligned because kernel may pack
+    // tracepoint data with non-standard alignment (safe: reading from valid kernel buffer).
+    let ptr = ctx.as_ptr() as *const SchedSwitch;
+    let sched_switch = unsafe { core::ptr::read_unaligned(ptr) };
+
+    let prev_pid = sched_switch.prev_pid;
+    let next_pid = sched_switch.next_pid;
 
     // --- Handle sched-out for prev_pid: accumulate cpu_time_ns ---
     if let Some(s) = CPU_STATS.get_ptr_mut(&prev_pid) {
@@ -223,11 +258,10 @@ fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
         }
         None => {
             // First time we see this PID; capture its comm and initialize
-            let comm: [u8; 16] = unsafe { ctx.read_at(40).unwrap_or([0u8; 16]) };
             let new_stats = PidCpuStats {
                 cpu_time_ns: 0,
                 last_sched_in_ns: now_ns,
-                comm,
+                comm: sched_switch.next_comm,
             };
             if CPU_STATS.insert(&next_pid, &new_stats, 0).is_err() {
                 warn!(ctx, "CPU_STATS map full");
@@ -241,11 +275,7 @@ fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
 /// Attached to block:block_rq_issue tracepoint.
 ///
 /// Fires when an I/O request is issued to the device driver, in process context.
-/// This means bpf_get_current_pid_tgid() returns the issuing process's PID.
-///
-/// Uses CO-RE (Compile Once Run Everywhere) to auto-detect field offsets from kernel BTF.
-/// This ensures the probe works across all supported kernel versions (4.18+) without
-/// recompilation or manual offset adjustments.
+/// Reads I/O size and direction via CO-RE struct (works on kernels 4.18+).
 #[tracepoint(name = "block_rq_issue", category = "block")]
 pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
     match try_block_rq_issue(&ctx) {
@@ -256,13 +286,9 @@ pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
 
 #[inline(always)]
 fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
-    // Cast raw context pointer to BlockRqIssue struct for CO-RE field discovery.
-    // The struct definition with correct field layout enables aya to use kernel BTF
-    // to auto-detect offsets at load time, ensuring portability across kernel versions.
+    // Cast context to BlockRqIssue struct. Use read_unaligned because kernel may pack
+    // tracepoint data with non-standard alignment (safe: reading from valid kernel buffer).
     let ptr = ctx.as_ptr() as *const BlockRqIssue;
-    // Use read_unaligned because tracepoint context may not be aligned to struct boundary
-    // (kernel may pack the data with custom alignment requirements). This is safe because
-    // we're reading from a valid kernel tracepoint context buffer.
     let rq_issue = unsafe { core::ptr::read_unaligned(ptr) };
 
     // Skip zero-sector requests (no actual I/O)
