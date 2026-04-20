@@ -13,3 +13,17 @@ pub struct PidNetStats {
     /// Captured in kernel-space so it's valid even after the process exits.
     pub comm: [u8; 16],
 }
+
+/// Per-PID CPU time accumulator stored in the BPF HashMap.
+/// Must be repr(C) for kernel/user-space ABI compatibility.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PidCpuStats {
+    /// Cumulative nanoseconds on-CPU, accumulated across all sched_switch events.
+    pub cpu_time_ns: u64,
+    /// Timestamp (from bpf_ktime_get_ns) when this PID was last scheduled on-CPU.
+    /// Non-zero when the process is currently on-CPU; zero when off-CPU.
+    pub last_sched_in_ns: u64,
+    /// Process name from task_struct comm field (16 bytes, null-terminated).
+    pub comm: [u8; 16],
+}

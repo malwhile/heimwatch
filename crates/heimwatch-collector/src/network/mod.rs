@@ -13,7 +13,7 @@ mod windows;
 
 // Export the appropriate collector for the current platform
 #[cfg(target_os = "linux")]
-pub use linux::NetworkCollector;
+pub use linux::{NetworkCollector, POLL_INTERVAL};
 #[cfg(target_os = "macos")]
 pub use macos::NetworkCollector;
 #[cfg(target_os = "windows")]

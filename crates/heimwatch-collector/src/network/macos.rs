@@ -3,6 +3,9 @@
 //! macOS uses different system tracing mechanisms (DTrace, FSEvents, etc.)
 //! which are not yet implemented. This is a placeholder for future work.
 
+/// Poll interval for network traffic collection (5 seconds).
+pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 use crate::error::CollectorError;
 use anyhow::Result;
 use heimwatch_core::{CollectorEvent, MetricRecord};
@@ -32,7 +35,6 @@ impl NetworkCollector {
         self,
         _tx: mpsc::Sender<CollectorEvent>,
         _shutdown: watch::Receiver<bool>,
-        _interval: Duration,
     ) -> Result<()> {
         Ok(())
     }

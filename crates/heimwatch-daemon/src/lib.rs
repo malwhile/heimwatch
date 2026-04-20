@@ -8,27 +8,23 @@ use heimwatch_collector::PlatformCollector;
 use heimwatch_core::CollectorEvent;
 use heimwatch_storage::StorageLayer;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
-/// Run the heimwatch daemon with the specified poll interval and database path.
+/// Run the heimwatch daemon with the specified database path.
 ///
 /// # Architecture
 /// - Collectors send `CollectorEvent`s through a shared mpsc channel
 /// - The daemon owns the only receiver and writes all events to the database
 /// - Shutdown is broadcast via `watch::channel` to all collectors
 /// - All collectors run as async tasks with event-driven coordination via tokio::select!
+/// - Each collector defines its own polling interval via POLL_INTERVAL constant
 ///
 /// # Errors
 /// Returns an error if:
 /// - `PlatformCollector::new()` fails (e.g., missing BPF capabilities)
 /// - Storage layer fails to initialize or persist records
-pub async fn run(poll_interval: Duration, db_path: &str) -> Result<()> {
-    log::debug!(
-        "Initializing daemon loop (interval: {:?}, db: {})",
-        poll_interval,
-        db_path
-    );
+pub async fn run(db_path: &str) -> Result<()> {
+    log::debug!("Initializing daemon loop (db: {})", db_path);
 
     // Initialize storage layer
     let storage = Arc::new(StorageLayer::open(db_path)?);
@@ -63,12 +59,26 @@ pub async fn run(poll_interval: Duration, db_path: &str) -> Result<()> {
         let tx = event_tx.clone();
         let shutdown = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            if let Err(e) = nc.run(tx, shutdown, poll_interval).await {
+            if let Err(e) = nc.run(tx, shutdown).await {
                 log::error!("Network collection error: {}", e);
             }
         });
     } else {
         log::debug!("Network collection unavailable on this platform");
+    }
+
+    // Spawn CPU collector (async task)
+    if let Some(cc) = collector.take_cpu_collector() {
+        log::info!("CPU tracking active");
+        let tx = event_tx.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            if let Err(e) = cc.run(tx, shutdown).await {
+                log::error!("CPU tracking error: {}", e);
+            }
+        });
+    } else {
+        log::debug!("CPU tracking unavailable on this platform");
     }
 
     // Drop the original event_tx so the channel closes when all collectors exit

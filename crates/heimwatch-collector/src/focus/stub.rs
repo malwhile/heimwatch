@@ -1,5 +1,8 @@
 //! Stub focus collector for non-Linux platforms.
 
+/// Event-driven collector (no polling interval needed). Kept for consistency with other collectors.
+pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(0);
+
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 

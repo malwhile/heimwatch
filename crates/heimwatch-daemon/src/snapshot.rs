@@ -1,4 +1,4 @@
-//! One-shot metric snapshots: network traffic and focus time.
+//! One-shot metric snapshots: network traffic, CPU usage, and focus time.
 
 use anyhow::{Result, anyhow};
 use heimwatch_collector::PlatformCollector;
@@ -6,12 +6,18 @@ use heimwatch_core::{MetricPayload, current_unix_timestamp};
 use heimwatch_storage::StorageLayer;
 use std::time::Duration;
 
-/// Capture a snapshot of metrics (network or focus) and print results.
+/// Capture a snapshot of metrics (network, CPU, or focus) and print results.
 ///
 /// # Network Snapshot
 /// 1. Creates `PlatformCollector::new()` in a blocking task (eBPF FDs are not Send)
 /// 2. Waits for the specified window duration (traffic accumulates in BPF map)
 /// 3. Calls `collect_network()` once (returns bytes accumulated since step 1)
+/// 4. Formats and prints results to stdout
+///
+/// # CPU Snapshot
+/// 1. Creates `PlatformCollector::new()` in a blocking task (eBPF FDs are not Send)
+/// 2. Waits for the specified window duration (CPU time accumulates in BPF map)
+/// 3. Calls `collect_cpu(window_duration)` once (returns CPU time accumulated since step 1)
 /// 4. Formats and prints results to stdout
 ///
 /// # Focus Snapshot
@@ -26,14 +32,19 @@ pub async fn run_snapshot(
     db_path: Option<&str>,
 ) -> Result<()> {
     match metric_type {
+        "cpu" => run_cpu_snapshot(window_secs, format).await,
         "focus" => run_focus_snapshot(window_secs, format, db_path).await,
         "network" => run_network_snapshot(window_secs, format).await,
-        _ => anyhow::bail!("Please choose either network or focus"),
+        _ => anyhow::bail!("Please choose cpu, focus, or network"),
     }
 }
 
 /// Capture network traffic snapshot (one-shot probe collection).
 async fn run_network_snapshot(window_secs: u64, format: &str) -> Result<()> {
+    if window_secs == 0 {
+        anyhow::bail!("Window must be greater than 0 seconds");
+    }
+
     log::info!("Attaching eBPF probes, observing for {}s...", window_secs);
 
     // PlatformCollector::new() blocks on eBPF FD setup
@@ -58,6 +69,47 @@ async fn run_network_snapshot(window_secs: u64, format: &str) -> Result<()> {
         }
         _ => {
             print_network_table(&records, window_secs);
+        }
+    }
+
+    Ok(())
+}
+
+/// Capture CPU usage snapshot (one-shot probe collection).
+async fn run_cpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
+    if window_secs == 0 {
+        anyhow::bail!("Window must be greater than 0 seconds");
+    }
+
+    log::info!(
+        "Attaching eBPF sched_switch probe, observing for {}s...",
+        window_secs
+    );
+
+    // PlatformCollector::new() blocks on eBPF FD setup
+    let mut collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
+
+    // Extract the CPU collector
+    let mut cpu_collector = collector
+        .take_cpu_collector()
+        .ok_or_else(|| anyhow::anyhow!("CPU tracking unavailable on this platform"))?;
+
+    // Wait for CPU time to accumulate in the BPF map
+    tokio::time::sleep(Duration::from_secs(window_secs)).await;
+
+    // Collect: first call returns CPU time accumulated since probe attachment
+    let records = tokio::task::spawn_blocking(move || {
+        cpu_collector.collect_cpu(Duration::from_secs(window_secs))
+    })
+    .await??;
+
+    // Format and output results
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&records)?);
+        }
+        _ => {
+            print_cpu_table(&records, window_secs);
         }
     }
 
@@ -126,6 +178,51 @@ fn print_network_table(records: &[heimwatch_core::MetricRecord], window_secs: u6
             fmt_bytes(total_tx),
             fmt_bytes(total_rx)
         );
+    }
+    println!();
+}
+
+/// Print a human-readable table of CPU usage by application.
+fn print_cpu_table(records: &[heimwatch_core::MetricRecord], window_secs: u64) {
+    println!("\nHeiwatch CPU Usage Snapshot ({}s window)", window_secs);
+    println!("{}", "─".repeat(52));
+    println!("  {:<28} {:>20}", "App", "CPU Usage");
+    println!("  {}", "─".repeat(48));
+
+    if records.is_empty() {
+        println!("  (no CPU activity observed)");
+    } else {
+        // Sort by usage descending
+        let mut sorted: Vec<_> = records.iter().collect();
+        sorted.sort_by(|a, b| {
+            let usage_a = if let MetricPayload::Cpu(cpu) = &a.payload {
+                cpu.usage_percent
+            } else {
+                0.0
+            };
+            let usage_b = if let MetricPayload::Cpu(cpu) = &b.payload {
+                cpu.usage_percent
+            } else {
+                0.0
+            };
+            usage_b
+                .partial_cmp(&usage_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut total_usage = 0.0;
+        for r in sorted {
+            if let MetricPayload::Cpu(cpu) = &r.payload {
+                println!(
+                    "  {:<28} {:>19.1}%",
+                    &r.app_name[..r.app_name.len().min(28)],
+                    cpu.usage_percent
+                );
+                total_usage += cpu.usage_percent;
+            }
+        }
+        println!("{}", "─".repeat(52));
+        println!("  {:<28} {:>19.1}%", "Total", total_usage);
     }
     println!();
 }

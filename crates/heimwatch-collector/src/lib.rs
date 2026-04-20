@@ -4,11 +4,13 @@
 //! implementation details. Each metric type (network, power, focus, system) can have
 //! platform-specific collectors that `PlatformCollector` coordinates.
 
+pub mod cpu;
 pub mod error;
 pub mod focus;
 pub mod network;
 
 use anyhow::Result;
+pub use cpu::CpuCollector;
 pub use error::CollectorError;
 pub use focus::FocusCollector;
 pub use network::NetworkCollector;
@@ -21,6 +23,7 @@ pub use network::NetworkCollector;
 pub struct PlatformCollector {
     network: Option<NetworkCollector>,
     focus_collector: Option<FocusCollector>,
+    cpu: Option<CpuCollector>,
 }
 
 impl PlatformCollector {
@@ -40,9 +43,22 @@ impl PlatformCollector {
         };
         let focus_collector = FocusCollector::try_new();
 
+        let cpu = match CpuCollector::new() {
+            Ok(cc) => Some(cc),
+            Err(e) => {
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("CPU collection not available: {}", e);
+                } else {
+                    log::warn!("CPU collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
+
         Ok(PlatformCollector {
             network,
             focus_collector,
+            cpu,
         })
     }
 
@@ -60,5 +76,12 @@ impl PlatformCollector {
     /// (since network collection uses eBPF which is not Send on Linux).
     pub fn take_network_collector(&mut self) -> Option<NetworkCollector> {
         self.network.take()
+    }
+
+    /// Extracts the CPU collector for spawning as an independent task.
+    ///
+    /// This is used by the daemon to run CPU collection in a separate tokio task.
+    pub fn take_cpu_collector(&mut self) -> Option<CpuCollector> {
+        self.cpu.take()
     }
 }
