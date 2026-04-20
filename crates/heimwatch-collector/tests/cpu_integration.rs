@@ -141,7 +141,7 @@ async fn test_cpu_aggregation_multithread() {
         if let MetricPayload::Cpu(cpu) = &event.payload {
             app_usage
                 .entry(event.app_name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(cpu.usage_percent);
         }
     }
