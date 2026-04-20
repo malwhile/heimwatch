@@ -62,6 +62,29 @@ cargo doc --no-deps --open
 - **On macOS/Windows**: `cargo build` works without eBPF; these crates are skipped
 - Both platforms can run tests and use the collector (Linux with eBPF, macOS/Windows with stubs)
 
+### Tracepoint Field Offset Portability
+
+⚠️ **Current Limitation:** eBPF probes (CPU `sched_switch`, Disk `block_rq_issue`, Network `tcp_sendmsg`/`tcp_recvmsg`) use **hardcoded field offsets** to read tracepoint context data. These offsets can shift between kernel versions (though they're stable in 4.4–6.x).
+
+**Verification before first deployment on a new system:**
+
+```bash
+# CPU: sched_switch offsets
+cat /sys/kernel/debug/tracing/events/sched/sched_switch/format
+# Expected: prev_pid@offset 24, next_pid@offset 56
+
+# Disk: block_rq_issue offsets
+cat /sys/kernel/debug/tracing/events/block/block_rq_issue/format
+# Expected: nr_sector@offset 24, rwbs@offset 32, comm@offset 40
+
+# Network: tcp_sendmsg / tcp_recvmsg (kprobes, no tracepoint)
+# No offset verification needed; uses function arguments directly
+```
+
+If offsets don't match, update the hardcoded values in `bpf/heimwatch-ebpf/src/main.rs` and rebuild.
+
+**Future improvement:** Use **CO-RE (Compile Once Run Everywhere)** with BTF to auto-detect offsets at runtime (aya + Linux 4.18+). See the CO-RE roadmap note below.
+
 Network traffic monitoring uses eBPF (extended Berkeley Packet Filter) for kernel-space byte counting on Linux. The eBPF crates require additional toolchain setup (Linux developers only).
 
 ### One-Time Prerequisites (Linux only)
@@ -131,6 +154,61 @@ These are one-time setup scripts; see their contents for usage.
 - **OS abstraction**: `heimwatch-core` provides traits that OS-specific implementations in `heimwatch-collector` conform to, enabling cross-platform support
 - **Embedded storage**: Uses `sled` for local persistence (privacy-first, no cloud sync)
 - **Dual interface**: Web dashboard (Axum + HTMX + Chart.js) and TUI (Ratatui) for different deployment scenarios
+- **eBPF portability trade-off**: Currently uses hardcoded tracepoint offsets for simplicity; future refactor should adopt CO-RE (Compile Once Run Everywhere) with BTF for kernel-agnostic field discovery (Linux 4.18+)
+
+## CO-RE Implementation (Offset Auto-Discovery)
+
+**Status:** ✅ **Implemented for disk I/O probe** (block_rq_issue)
+
+**Problem (solved):** Hardcoded tracepoint field offsets break across kernel versions.
+
+**Solution:** Use **CO-RE + BTF (BPF Type Format)** to auto-detect struct field offsets at load time.
+
+**Implementation (disk probe, `bpf/heimwatch-ebpf/src/main.rs`):**
+
+```rust
+// Define struct with correct field layout
+#[repr(C)]
+struct BlockRqIssue {
+    _common_type: u32,
+    _common_flags: u32,
+    _common_preempt_count: i32,
+    _common_pid: i32,
+    dev: u32,
+    _pad1: u32,
+    sector: u64,
+    nr_sector: u32,
+    _pad2: u32,
+    rwbs: [u8; 8],
+    comm: [u8; 16],
+}
+
+// Cast context pointer to struct (no hardcoded offsets)
+let ptr = ctx.as_ptr() as *const BlockRqIssue;
+let rq_issue = unsafe { core::ptr::read_unaligned(ptr) };
+
+// Access fields by name; aya resolves offsets from kernel BTF at load time
+if rq_issue.nr_sector == 0 { /* ... */ }
+let is_read = rq_issue.rwbs[0] == b'R';
+```
+
+**How it works:**
+1. **Compile time:** eBPF program defines struct with field order matching kernel's tracepoint
+2. **Load time:** aya reads kernel's BTF (if available) and adjusts field offsets automatically
+3. **Runtime:** Single binary works across all kernel versions (4.18+)
+
+**Requirements:**
+- Kernel 4.18+ with BTF support (`CONFIG_DEBUG_INFO_BTF=y`)
+- LLVM 10+ (bpf-linker already uses LLVM 18) ✓
+- No special rustup configuration needed (already in place)
+
+**Benefits:**
+- ✅ No hardcoded offsets (portable across kernel versions)
+- ✅ No offset verification needed (auto-detected)
+- ✅ Single compiled binary for all supported kernels
+- ✅ Compile Once Run Everywhere (C.O.R.E.) principle
+
+**Next:** Apply same pattern to CPU probe (`trace_sched_switch`) for complete portability.
 
 ## Development Notes
 

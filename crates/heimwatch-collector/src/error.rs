@@ -49,6 +49,10 @@ pub enum CollectorError {
     /// CPU collector initialization failed (e.g., missing eBPF capabilities).
     #[error("CPU collector initialization failed: {0}")]
     CpuInitializationFailed(String),
+
+    /// Disk collector initialization failed (e.g., missing eBPF capabilities).
+    #[error("disk collector initialization failed: {0}")]
+    DiskInitializationFailed(String),
 }
 
 #[cfg(target_os = "linux")]

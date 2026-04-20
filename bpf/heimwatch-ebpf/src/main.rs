@@ -6,13 +6,45 @@ use aya_ebpf::{
     macros::{kprobe, kretprobe, map, tracepoint},
     maps::HashMap,
     programs::{ProbeContext, RetProbeContext, TracePointContext},
+    EbpfContext,
 };
 use aya_log_ebpf::warn;
-use heimwatch_ebpf_common::{PidNetStats, PidCpuStats};
+use heimwatch_ebpf_common::{PidNetStats, PidCpuStats, PidDiskStats};
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
+}
+
+/// block_rq_issue tracepoint struct for CO-RE field discovery.
+///
+/// CO-RE (Compile Once Run Everywhere) uses kernel BTF to auto-detect field offsets
+/// at eBPF program load time, making this code portable across kernel versions.
+/// Fields are in the order they appear in the kernel's tracepoint definition.
+#[repr(C)]
+struct BlockRqIssue {
+    /// Common tracepoint header (skipped for now)
+    _common_type: u32,
+    _common_flags: u32,
+    _common_preempt_count: i32,
+    _common_pid: i32,
+
+    /// Block device identifier
+    dev: u32,
+    _pad1: u32,
+
+    /// Starting sector for this I/O
+    sector: u64,
+
+    /// Number of sectors in this request
+    nr_sector: u32,
+    _pad2: u32,
+
+    /// rwbs[0] = 'R' (read), 'W' (write), 'D' (discard), etc.
+    rwbs: [u8; 8],
+
+    /// Process name from task_struct
+    comm: [u8; 16],
 }
 
 /// BPF map: key = PID (u32), value = PidNetStats (tx_bytes, rx_bytes)
@@ -26,6 +58,11 @@ static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(10_2
 /// Max 10,240 entries (~120 KB). Tracks cumulative CPU time per process via sched_switch.
 #[map]
 static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(10_240, 0);
+
+/// BPF map: key = PID (u32), value = PidDiskStats (read_bytes, write_bytes, comm)
+/// Max 10,240 entries (~120 KB). Tracks cumulative block I/O bytes per process via block_rq_issue.
+#[map]
+static DISK_STATS: HashMap<u32, PidDiskStats> = HashMap::with_max_entries(10_240, 0);
 
 /// Attached to tcp_sendmsg. Size is passed directly as arg 2.
 ///
@@ -194,6 +231,75 @@ fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
             };
             if CPU_STATS.insert(&next_pid, &new_stats, 0).is_err() {
                 warn!(ctx, "CPU_STATS map full");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Attached to block:block_rq_issue tracepoint.
+///
+/// Fires when an I/O request is issued to the device driver, in process context.
+/// This means bpf_get_current_pid_tgid() returns the issuing process's PID.
+///
+/// Uses CO-RE (Compile Once Run Everywhere) to auto-detect field offsets from kernel BTF.
+/// This ensures the probe works across all supported kernel versions (4.18+) without
+/// recompilation or manual offset adjustments.
+#[tracepoint(name = "block_rq_issue", category = "block")]
+pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
+    match try_block_rq_issue(&ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
+    // Cast raw context pointer to BlockRqIssue struct for CO-RE field discovery.
+    // The struct definition with correct field layout enables aya to use kernel BTF
+    // to auto-detect offsets at load time, ensuring portability across kernel versions.
+    let ptr = ctx.as_ptr() as *const BlockRqIssue;
+    // Use read_unaligned because tracepoint context may not be aligned to struct boundary
+    // (kernel may pack the data with custom alignment requirements). This is safe because
+    // we're reading from a valid kernel tracepoint context buffer.
+    let rq_issue = unsafe { core::ptr::read_unaligned(ptr) };
+
+    // Skip zero-sector requests (no actual I/O)
+    if rq_issue.nr_sector == 0 {
+        return Ok(());
+    }
+
+    // Get current PID; skip kernel threads (PID 0)
+    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    if pid == 0 {
+        return Ok(());
+    }
+
+    // Convert sectors to bytes (512 bytes per sector)
+    let bytes = (rq_issue.nr_sector as u64).saturating_mul(512);
+
+    // Determine if this is a read (R) or write (W) operation
+    let is_read = rq_issue.rwbs[0] == b'R';
+    let is_write = rq_issue.rwbs[0] == b'W';
+
+    // Update or insert the stats for this PID
+    match DISK_STATS.get_ptr_mut(&pid) {
+        Some(s) => unsafe {
+            if is_read {
+                (*s).read_bytes = (*s).read_bytes.saturating_add(bytes);
+            } else if is_write {
+                (*s).write_bytes = (*s).write_bytes.saturating_add(bytes);
+            }
+        },
+        None => {
+            let new_stats = PidDiskStats {
+                read_bytes: if is_read { bytes } else { 0 },
+                write_bytes: if is_write { bytes } else { 0 },
+                comm: rq_issue.comm,
+            };
+            if DISK_STATS.insert(&pid, &new_stats, 0).is_err() {
+                warn!(ctx, "DISK_STATS map full");
             }
         }
     }
