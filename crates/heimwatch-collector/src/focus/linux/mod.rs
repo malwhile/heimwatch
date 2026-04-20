@@ -109,15 +109,10 @@ impl FocusCollector {
                     if let Some(prev_app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp()?;
-                        tx.send(CollectorEvent {
-                            app_name: prev_app.clone(),
-                            payload: MetricPayload::Foc(FocusData {
-                                app_id: prev_app.clone(),
-                                duration_ms: elapsed_ms,
-                            }),
-                            timestamp,
-                        })
-                        .await?;
+                        let event = create_focus_event(prev_app.clone(), elapsed_ms, timestamp);
+                        if let Err(e) = tx.send(event).await {
+                            log::error!("Failed to send focus event for app '{}': {}", prev_app, e);
+                        }
                     }
 
                     // Update current focus
@@ -130,15 +125,10 @@ impl FocusCollector {
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp()?;
-                        let _ = tx.send(CollectorEvent {
-                            app_name: app.clone(),
-                            payload: MetricPayload::Foc(FocusData {
-                                app_id: app.clone(),
-                                duration_ms: elapsed_ms,
-                            }),
-                            timestamp,
-                        })
-                        .await;
+                        let event = create_focus_event(app.clone(), elapsed_ms, timestamp);
+                        if let Err(e) = tx.send(event).await {
+                            log::warn!("Failed to send final focus event on shutdown: {}", e);
+                        }
                     }
                     break;
                 }
@@ -149,15 +139,10 @@ impl FocusCollector {
                     if let Some(app) = &state.current_app {
                         let elapsed_ms = state.focus_start.elapsed().as_millis() as u64;
                         let timestamp = current_unix_timestamp().unwrap_or(0);
-                        let _ = tx.send(CollectorEvent {
-                            app_name: app.clone(),
-                            payload: MetricPayload::Foc(FocusData {
-                                app_id: app.clone(),
-                                duration_ms: elapsed_ms,
-                            }),
-                            timestamp,
-                        })
-                        .await;
+                        let event = create_focus_event(app.clone(), elapsed_ms, timestamp);
+                        if let Err(e) = tx.send(event).await {
+                            log::warn!("Failed to send final focus event after listener failure: {}", e);
+                        }
                     }
                     break;
                 }
@@ -186,6 +171,18 @@ fn normalize_app_id(raw: Option<String>) -> String {
             s
         })
         .unwrap_or_else(|| "Unknown".to_string())
+}
+
+/// Create a focus event with the given app, elapsed time, and timestamp.
+fn create_focus_event(app_name: String, elapsed_ms: u64, timestamp: u64) -> CollectorEvent {
+    CollectorEvent {
+        app_name: app_name.clone(),
+        payload: MetricPayload::Foc(FocusData {
+            app_id: app_name,
+            duration_ms: elapsed_ms,
+        }),
+        timestamp,
+    }
 }
 
 #[cfg(test)]

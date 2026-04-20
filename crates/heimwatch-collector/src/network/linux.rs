@@ -173,11 +173,14 @@ impl NetworkCollector {
             for record in self.collect_network()? {
                 if let MetricPayload::Net(_) = &record.payload {
                     // Send the complete network record as a single event
-                    let _ = tx.blocking_send(CollectorEvent {
-                        app_name: record.app_name,
+                    let event = CollectorEvent {
+                        app_name: record.app_name.clone(),
                         payload: record.payload,
                         timestamp: record.timestamp,
-                    });
+                    };
+                    if let Err(e) = tx.blocking_send(event) {
+                        log::error!("Failed to send network event for app '{}': {}", record.app_name, e);
+                    }
                 }
             }
         }

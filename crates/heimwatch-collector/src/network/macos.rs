@@ -17,9 +17,9 @@ impl NetworkCollector {
     /// Create a new NetworkCollector for macOS.
     /// Currently unimplemented; use DTrace or system call tracing in the future.
     pub fn new() -> Result<Self> {
-        Err(anyhow::anyhow!(
-            CollectorError::PlatformNotSupported("macOS network collection not yet implemented".to_string())
-        ))
+        Err(anyhow::anyhow!(CollectorError::PlatformNotSupported(
+            "macOS network collection not yet implemented".to_string()
+        )))
     }
 
     /// Collect network metrics (stub).
