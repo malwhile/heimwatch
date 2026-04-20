@@ -227,4 +227,59 @@ mod tests {
             "org.gnome.Nautilus"
         );
     }
+
+    #[test]
+    fn test_create_focus_event_structure() {
+        let app_name = "firefox".to_string();
+        let elapsed_ms = 5000u64;
+        let timestamp = 1234567890u64;
+
+        let event = create_focus_event(app_name.clone(), elapsed_ms, timestamp);
+
+        assert_eq!(event.app_name, "firefox");
+        assert_eq!(event.timestamp, 1234567890);
+
+        // Verify the payload is FocusData with correct values
+        match event.payload {
+            MetricPayload::Foc(data) => {
+                assert_eq!(data.app_id, "firefox");
+                assert_eq!(data.duration_ms, 5000);
+            }
+            _ => panic!("Expected FocusData payload"),
+        }
+    }
+
+    #[test]
+    fn test_create_focus_event_consistency() {
+        // Verify that the same inputs always produce the same event structure
+        let event1 = create_focus_event("chrome".to_string(), 3000, 999);
+        let event2 = create_focus_event("chrome".to_string(), 3000, 999);
+
+        assert_eq!(event1.app_name, event2.app_name);
+        assert_eq!(event1.timestamp, event2.timestamp);
+
+        match (&event1.payload, &event2.payload) {
+            (MetricPayload::Foc(d1), MetricPayload::Foc(d2)) => {
+                assert_eq!(d1.app_id, d2.app_id);
+                assert_eq!(d1.duration_ms, d2.duration_ms);
+            }
+            _ => panic!("Both should have FocusData payload"),
+        }
+    }
+
+    #[test]
+    fn test_create_focus_event_with_different_apps() {
+        let firefox_event = create_focus_event("firefox".to_string(), 1000, 100);
+        let chrome_event = create_focus_event("chrome".to_string(), 2000, 200);
+
+        assert_ne!(firefox_event.app_name, chrome_event.app_name);
+
+        match (&firefox_event.payload, &chrome_event.payload) {
+            (MetricPayload::Foc(f), MetricPayload::Foc(c)) => {
+                assert_eq!(f.duration_ms, 1000);
+                assert_eq!(c.duration_ms, 2000);
+            }
+            _ => panic!("Both should have FocusData payload"),
+        }
+    }
 }
