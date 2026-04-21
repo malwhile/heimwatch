@@ -8,6 +8,7 @@ pub mod cpu;
 pub mod disk;
 pub mod error;
 pub mod focus;
+pub mod memory;
 pub mod network;
 pub mod util;
 
@@ -16,6 +17,7 @@ pub use cpu::CpuCollector;
 pub use disk::DiskCollector;
 pub use error::CollectorError;
 pub use focus::FocusCollector;
+pub use memory::MemoryCollector;
 pub use network::NetworkCollector;
 
 /// Unified collector that delegates to platform-specific collectors.
@@ -28,6 +30,7 @@ pub struct PlatformCollector {
     focus_collector: Option<FocusCollector>,
     cpu: Option<CpuCollector>,
     disk: Option<DiskCollector>,
+    memory: Option<MemoryCollector>,
 }
 
 impl PlatformCollector {
@@ -71,11 +74,24 @@ impl PlatformCollector {
             }
         };
 
+        let memory = match MemoryCollector::new() {
+            Ok(mc) => Some(mc),
+            Err(e) => {
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("Memory collection not available: {}", e);
+                } else {
+                    log::warn!("Memory collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
+
         Ok(PlatformCollector {
             network,
             focus_collector,
             cpu,
             disk,
+            memory,
         })
     }
 
@@ -107,5 +123,12 @@ impl PlatformCollector {
     /// This is used by the daemon to run disk collection in a separate tokio task.
     pub fn take_disk_collector(&mut self) -> Option<DiskCollector> {
         self.disk.take()
+    }
+
+    /// Extracts the memory collector for spawning as an independent task.
+    ///
+    /// This is used by the daemon to run memory collection in a separate tokio task.
+    pub fn take_memory_collector(&mut self) -> Option<MemoryCollector> {
+        self.memory.take()
     }
 }

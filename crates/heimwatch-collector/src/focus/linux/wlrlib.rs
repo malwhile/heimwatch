@@ -158,7 +158,16 @@ impl Dispatch<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, ()
     ) -> std::sync::Arc<dyn wayland_client::backend::ObjectData> {
         match opcode {
             EVT_TOPLEVEL_OPCODE => qhandle.make_data::<ZwlrForeignToplevelHandleV1, ()>(()),
-            _ => panic!("Unexpected opcode in foreign toplevel manager: {}", opcode),
+            _ => {
+                log::error!(
+                    "Unexpected opcode {} in foreign toplevel manager; \
+                     this may indicate a protocol version mismatch or server bug. \
+                     Please report this issue with your Wayland version.",
+                    opcode
+                );
+                // Return a dummy object data to prevent crash; this object won't be used
+                qhandle.make_data::<ZwlrForeignToplevelHandleV1, ()>(())
+            }
         }
     }
 }

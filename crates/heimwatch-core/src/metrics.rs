@@ -74,11 +74,13 @@ pub struct CpuData {
     pub core_count: u32,
 }
 
-/// Memory usage data.
+/// Memory usage data (aggregated across all processes for an app).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryData {
-    pub used_bytes: u64,
-    pub total_bytes: u64,
+    pub rss_bytes: u64,
+    pub vms_bytes: u64,
+    pub swap_bytes: u64,
+    pub process_count: u32,
 }
 
 /// Disk I/O data.
