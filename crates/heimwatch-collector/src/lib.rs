@@ -8,6 +8,7 @@ pub mod cpu;
 pub mod disk;
 pub mod error;
 pub mod focus;
+pub mod gpu;
 pub mod memory;
 pub mod network;
 pub mod util;
@@ -17,6 +18,7 @@ pub use cpu::CpuCollector;
 pub use disk::DiskCollector;
 pub use error::CollectorError;
 pub use focus::FocusCollector;
+pub use gpu::GpuCollector;
 pub use memory::MemoryCollector;
 pub use network::NetworkCollector;
 
@@ -31,6 +33,7 @@ pub struct PlatformCollector {
     cpu: Option<CpuCollector>,
     disk: Option<DiskCollector>,
     memory: Option<MemoryCollector>,
+    gpu: Option<GpuCollector>,
 }
 
 impl PlatformCollector {
@@ -86,12 +89,25 @@ impl PlatformCollector {
             }
         };
 
+        let gpu = match GpuCollector::new() {
+            Ok(gc) => Some(gc),
+            Err(e) => {
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("GPU collection not available: {}", e);
+                } else {
+                    log::warn!("GPU collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
+
         Ok(PlatformCollector {
             network,
             focus_collector,
             cpu,
             disk,
             memory,
+            gpu,
         })
     }
 
@@ -130,5 +146,12 @@ impl PlatformCollector {
     /// This is used by the daemon to run memory collection in a separate tokio task.
     pub fn take_memory_collector(&mut self) -> Option<MemoryCollector> {
         self.memory.take()
+    }
+
+    /// Extracts the GPU collector for spawning as an independent task.
+    ///
+    /// This is used by the daemon to run GPU collection in a separate tokio task.
+    pub fn take_gpu_collector(&mut self) -> Option<GpuCollector> {
+        self.gpu.take()
     }
 }
