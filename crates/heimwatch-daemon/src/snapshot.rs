@@ -333,10 +333,16 @@ mod tests {
         assert!(bytes_0.contains("B"), "0 bytes should format with B suffix");
 
         let bytes_512 = fmt_bytes(512);
-        assert!(bytes_512.contains("B"), "512 bytes should format with B suffix");
+        assert!(
+            bytes_512.contains("B"),
+            "512 bytes should format with B suffix"
+        );
 
         let bytes_1kb = fmt_bytes(1024);
-        assert!(bytes_1kb.contains("KB"), "1024 bytes should format with KB suffix");
+        assert!(
+            bytes_1kb.contains("KB"),
+            "1024 bytes should format with KB suffix"
+        );
 
         let bytes_1mb = fmt_bytes(1_048_576);
         assert!(bytes_1mb.contains("MB"), "1MB should format with MB suffix");
@@ -371,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_print_disk_table_sorting() {
-        use heimwatch_core::{DiskData};
+        use heimwatch_core::DiskData;
 
         let records = vec![
             MetricRecord {
