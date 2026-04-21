@@ -71,6 +71,16 @@ enum SnapshotCommand {
         #[arg(short, long, default_value = "text")]
         format: String,
     },
+    /// One-shot memory usage snapshot (polls /proc/[pid]/status)
+    Memory {
+        /// Observation window in seconds (polling accumulates, then collect)
+        #[arg(short, long, default_value = "5")]
+        window: u64,
+
+        /// Output format: text (human-readable) or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
     /// Focus time snapshot (queries database for focus events)
     Focus {
         /// Query window in seconds (e.g., last 30 seconds of focus data)
@@ -110,6 +120,9 @@ async fn main() -> anyhow::Result<()> {
             }
             SnapshotCommand::Disk { window, format } => {
                 snapshot::run_snapshot(window, &format, "disk", None).await?;
+            }
+            SnapshotCommand::Memory { window, format } => {
+                snapshot::run_snapshot(window, &format, "memory", None).await?;
             }
             SnapshotCommand::Focus { window, format, db } => {
                 snapshot::run_snapshot(window, &format, "focus", Some(&db)).await?;

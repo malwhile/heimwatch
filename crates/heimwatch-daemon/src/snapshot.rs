@@ -1,13 +1,12 @@
-//! One-shot metric snapshots: network traffic, CPU usage, disk I/O, and focus time.
+//! One-shot metric snapshots: network traffic, CPU usage, disk I/O, memory usage, and focus time.
 
 use anyhow::{Result, anyhow};
-use heimwatch_collector::PlatformCollector;
 use heimwatch_core::{MetricPayload, MetricRecord, current_unix_timestamp};
 use heimwatch_storage::StorageLayer;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Capture a snapshot of metrics (network, CPU, disk, or focus) and print results.
+/// Capture a snapshot of metrics (network, CPU, disk, memory, or focus) and print results.
 ///
 /// Dispatches to platform-specific collectors or database queries based on metric_type.
 pub async fn run_snapshot(
@@ -20,8 +19,9 @@ pub async fn run_snapshot(
         "cpu" => run_cpu_snapshot(window_secs, format).await,
         "disk" => run_disk_snapshot(window_secs, format).await,
         "focus" => run_focus_snapshot(window_secs, format, db_path).await,
+        "memory" => run_memory_snapshot(window_secs, format).await,
         "network" => run_network_snapshot(window_secs, format).await,
-        _ => anyhow::bail!("Please choose cpu, disk, focus, or network"),
+        _ => anyhow::bail!("Please choose cpu, disk, focus, memory, or network"),
     }
 }
 
@@ -32,10 +32,10 @@ async fn run_network_snapshot(window_secs: u64, format: &str) -> Result<()> {
     }
 
     log::info!("Attaching eBPF probes, observing for {}s...", window_secs);
-    let mut collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
-    let mut network_collector = collector
-        .take_network_collector()
-        .ok_or_else(|| anyhow!("Network collection unavailable on this platform"))?;
+    let mut network_collector =
+        tokio::task::spawn_blocking(heimwatch_collector::NetworkCollector::new)
+            .await?
+            .map_err(|e| anyhow!("Network collection unavailable on this platform: {}", e))?;
 
     tokio::time::sleep(Duration::from_secs(window_secs)).await;
     let records =
@@ -55,10 +55,9 @@ async fn run_cpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
         "Attaching eBPF sched_switch probe, observing for {}s...",
         window_secs
     );
-    let mut collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
-    let mut cpu_collector = collector
-        .take_cpu_collector()
-        .ok_or_else(|| anyhow!("CPU tracking unavailable on this platform"))?;
+    let mut cpu_collector = tokio::task::spawn_blocking(heimwatch_collector::CpuCollector::new)
+        .await?
+        .map_err(|e| anyhow!("CPU tracking unavailable on this platform: {}", e))?;
 
     tokio::time::sleep(Duration::from_secs(window_secs)).await;
     let records = tokio::task::spawn_blocking(move || {
@@ -80,16 +79,36 @@ async fn run_disk_snapshot(window_secs: u64, format: &str) -> Result<()> {
         "Attaching eBPF block_rq_issue probe, observing for {}s...",
         window_secs
     );
-    let mut collector = tokio::task::spawn_blocking(PlatformCollector::new).await??;
-    let mut disk_collector = collector
-        .take_disk_collector()
-        .ok_or_else(|| anyhow!("Disk I/O tracking unavailable on this platform"))?;
+    let mut disk_collector = tokio::task::spawn_blocking(heimwatch_collector::DiskCollector::new)
+        .await?
+        .map_err(|e| anyhow!("Disk I/O tracking unavailable on this platform: {}", e))?;
 
     tokio::time::sleep(Duration::from_secs(window_secs)).await;
     let records = tokio::task::spawn_blocking(move || {
         disk_collector.collect_disk(Duration::from_secs(window_secs))
     })
     .await??;
+
+    format_output(format, &records, window_secs)?;
+    Ok(())
+}
+
+/// Capture memory usage snapshot (polling collection).
+async fn run_memory_snapshot(window_secs: u64, format: &str) -> Result<()> {
+    if window_secs == 0 {
+        anyhow::bail!("Window must be greater than 0 seconds");
+    }
+
+    log::info!(
+        "Polling /proc for memory usage, observing for {}s...",
+        window_secs
+    );
+    let memory_collector = tokio::task::spawn_blocking(heimwatch_collector::MemoryCollector::new)
+        .await?
+        .map_err(|e| anyhow!("Memory tracking unavailable on this platform: {}", e))?;
+
+    tokio::time::sleep(Duration::from_secs(window_secs)).await;
+    let records = tokio::task::spawn_blocking(move || memory_collector.collect_memory()).await??;
 
     format_output(format, &records, window_secs)?;
     Ok(())
@@ -140,6 +159,7 @@ fn print_snapshot_table(records: &[MetricRecord], window_secs: u64) {
         MetricPayload::Net(_) => print_network_table(records, window_secs),
         MetricPayload::Cpu(_) => print_cpu_table(records, window_secs),
         MetricPayload::Dsk(_) => print_disk_table(records, window_secs),
+        MetricPayload::Mem(_) => print_memory_table(records, window_secs),
         MetricPayload::Foc(_) => print_focus_table(records, window_secs),
         _ => println!("  (unsupported metric type)"),
     }
@@ -258,6 +278,59 @@ fn print_disk_table(records: &[MetricRecord], window_secs: u64) {
         "Total",
         fmt_bytes(total_read),
         fmt_bytes(total_write)
+    );
+    println!();
+}
+
+/// Print a human-readable table of memory usage by application.
+fn print_memory_table(records: &[MetricRecord], window_secs: u64) {
+    println!("\nHeiwatch Memory Usage Snapshot ({}s window)", window_secs);
+    println!("{}", "─".repeat(80));
+    println!(
+        "  {:<28} {:>10} {:>10} {:>10} {:>10}",
+        "App", "RSS", "VMS", "Swap", "Procs"
+    );
+    println!("  {}", "─".repeat(76));
+
+    // Sort by RSS descending
+    let mut sorted: Vec<_> = records.iter().collect();
+    sorted.sort_by(|a, b| {
+        let rss_a = if let MetricPayload::Mem(mem) = &a.payload {
+            mem.rss_bytes
+        } else {
+            0
+        };
+        let rss_b = if let MetricPayload::Mem(mem) = &b.payload {
+            mem.rss_bytes
+        } else {
+            0
+        };
+        rss_b.cmp(&rss_a)
+    });
+
+    let (mut total_rss, mut total_vms, mut total_swap) = (0u64, 0u64, 0u64);
+    for r in sorted {
+        if let MetricPayload::Mem(mem) = &r.payload {
+            println!(
+                "  {:<28} {:>10} {:>10} {:>10} {:>10}",
+                &r.app_name[..r.app_name.len().min(28)],
+                fmt_bytes(mem.rss_bytes),
+                fmt_bytes(mem.vms_bytes),
+                fmt_bytes(mem.swap_bytes),
+                mem.process_count
+            );
+            total_rss += mem.rss_bytes;
+            total_vms += mem.vms_bytes;
+            total_swap += mem.swap_bytes;
+        }
+    }
+    println!("{}", "─".repeat(80));
+    println!(
+        "  {:<28} {:>10} {:>10} {:>10}",
+        "Total",
+        fmt_bytes(total_rss),
+        fmt_bytes(total_vms),
+        fmt_bytes(total_swap)
     );
     println!();
 }
