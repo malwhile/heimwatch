@@ -96,6 +96,20 @@ pub async fn run(db_path: &str) -> Result<()> {
         log::debug!("Disk I/O tracking unavailable on this platform");
     }
 
+    // Spawn memory collector (async task)
+    if let Some(mc) = collector.take_memory_collector() {
+        log::info!("Memory tracking active");
+        let tx = event_tx.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            if let Err(e) = mc.run(tx, shutdown).await {
+                log::error!("Memory tracking error: {}", e);
+            }
+        });
+    } else {
+        log::debug!("Memory tracking unavailable on this platform");
+    }
+
     // Drop the original event_tx so the channel closes when all collectors exit
     drop(event_tx);
 
