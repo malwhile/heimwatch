@@ -27,3 +27,16 @@ pub struct PidCpuStats {
     /// Process name from task_struct comm field (16 bytes, null-terminated).
     pub comm: [u8; 16],
 }
+
+/// Per-PID disk I/O byte counters stored in the BPF HashMap.
+/// Must be repr(C) for kernel/user-space ABI compatibility.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PidDiskStats {
+    /// Cumulative bytes read from block devices by this PID via block_rq_issue.
+    pub read_bytes: u64,
+    /// Cumulative bytes written to block devices by this PID via block_rq_issue.
+    pub write_bytes: u64,
+    /// Process name from task_struct comm field (16 bytes, null-terminated).
+    pub comm: [u8; 16],
+}

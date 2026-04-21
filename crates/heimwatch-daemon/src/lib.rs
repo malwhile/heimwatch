@@ -2,6 +2,7 @@
 
 pub mod logging;
 pub mod snapshot;
+pub mod table;
 
 use anyhow::Result;
 use heimwatch_collector::PlatformCollector;
@@ -79,6 +80,20 @@ pub async fn run(db_path: &str) -> Result<()> {
         });
     } else {
         log::debug!("CPU tracking unavailable on this platform");
+    }
+
+    // Spawn disk collector (async task)
+    if let Some(dc) = collector.take_disk_collector() {
+        log::info!("Disk I/O tracking active");
+        let tx = event_tx.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            if let Err(e) = dc.run(tx, shutdown).await {
+                log::error!("Disk I/O tracking error: {}", e);
+            }
+        });
+    } else {
+        log::debug!("Disk I/O tracking unavailable on this platform");
     }
 
     // Drop the original event_tx so the channel closes when all collectors exit

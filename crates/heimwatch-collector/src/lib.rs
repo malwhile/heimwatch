@@ -5,12 +5,15 @@
 //! platform-specific collectors that `PlatformCollector` coordinates.
 
 pub mod cpu;
+pub mod disk;
 pub mod error;
 pub mod focus;
 pub mod network;
+pub mod util;
 
 use anyhow::Result;
 pub use cpu::CpuCollector;
+pub use disk::DiskCollector;
 pub use error::CollectorError;
 pub use focus::FocusCollector;
 pub use network::NetworkCollector;
@@ -24,6 +27,7 @@ pub struct PlatformCollector {
     network: Option<NetworkCollector>,
     focus_collector: Option<FocusCollector>,
     cpu: Option<CpuCollector>,
+    disk: Option<DiskCollector>,
 }
 
 impl PlatformCollector {
@@ -55,10 +59,23 @@ impl PlatformCollector {
             }
         };
 
+        let disk = match DiskCollector::new() {
+            Ok(dc) => Some(dc),
+            Err(e) => {
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("Disk collection not available: {}", e);
+                } else {
+                    log::warn!("Disk collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
+
         Ok(PlatformCollector {
             network,
             focus_collector,
             cpu,
+            disk,
         })
     }
 
@@ -83,5 +100,12 @@ impl PlatformCollector {
     /// This is used by the daemon to run CPU collection in a separate tokio task.
     pub fn take_cpu_collector(&mut self) -> Option<CpuCollector> {
         self.cpu.take()
+    }
+
+    /// Extracts the disk collector for spawning as an independent task.
+    ///
+    /// This is used by the daemon to run disk collection in a separate tokio task.
+    pub fn take_disk_collector(&mut self) -> Option<DiskCollector> {
+        self.disk.take()
     }
 }

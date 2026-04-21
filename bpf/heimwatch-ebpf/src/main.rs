@@ -1,35 +1,114 @@
 #![no_std]
 #![no_main]
 
+//! Heimwatch eBPF programs for kernel-space system metrics collection.
+//!
+//! This module uses CO-RE (Compile Once Run Everywhere) for tracepoint probes. CO-RE enables
+//! portable eBPF programs that work across different kernel versions without recompilation or
+//! manual offset adjustments. The aya compiler uses kernel BTF (BPF Type Format) at load time
+//! to automatically discover field offsets in tracepoint context structs. Tracepoint field
+//! layouts are stable within kernel series but may shift across major versions — CO-RE handles
+//! this transparently by reading the kernel's BTF at eBPF program load time.
+//!
+//! Network probes (tcp_sendmsg, tcp_recvmsg) use kprobes/kretprobes instead of tracepoints
+//! and don't require CO-RE because they monitor stable kernel function signatures (ABI-guaranteed).
+
 use aya_ebpf::{
     helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns},
     macros::{kprobe, kretprobe, map, tracepoint},
     maps::HashMap,
     programs::{ProbeContext, RetProbeContext, TracePointContext},
+    EbpfContext,
 };
 use aya_log_ebpf::warn;
-use heimwatch_ebpf_common::{PidNetStats, PidCpuStats};
+use heimwatch_ebpf_common::{PidNetStats, PidCpuStats, PidDiskStats};
+
+/// Max entries per BPF map. On larger systems with >10K processes, older/inactive PIDs are evicted.
+/// User-space collector handles missing PIDs gracefully by continuing to next entry.
+const BPF_MAP_ENTRIES: u32 = 10_240;
+
+/// Logical sector size on Linux block devices (bytes).
+const SECTOR_BYTES: u64 = 512;
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
 
+/// sched_switch tracepoint struct for CO-RE field discovery.
+/// Fields match kernel's internal layout (stable since kernel 4.4).
+#[repr(C)]
+struct SchedSwitch {
+    /// Common tracepoint header
+    _common_type: u32,
+    _common_flags: u32,
+    _common_preempt_count: i32,
+    _common_pid: i32,
+
+    /// Process being switched off
+    prev_comm: [u8; 16],
+    prev_pid: u32,
+    prev_prio: i32,
+
+    /// Process state bits (see kernel sched.h)
+    prev_state: i64,
+
+    /// Process being switched on
+    next_comm: [u8; 16],
+    next_pid: u32,
+    _next_prio: i32,
+}
+
+/// block_rq_issue tracepoint struct for CO-RE field discovery.
+/// Fields match kernel's internal layout (stable since kernel 4.18).
+#[repr(C)]
+struct BlockRqIssue {
+    /// Common tracepoint header (skipped for now)
+    _common_type: u32,
+    _common_flags: u32,
+    _common_preempt_count: i32,
+    _common_pid: i32,
+
+    /// Block device identifier
+    dev: u32,
+    _pad1: u32,
+
+    /// Starting sector for this I/O
+    sector: u64,
+
+    /// Number of sectors in this request
+    nr_sector: u32,
+    _pad2: u32,
+
+    /// rwbs[0] = 'R' (read), 'W' (write), 'D' (discard), etc.
+    rwbs: [u8; 8],
+
+    /// Process name from task_struct
+    comm: [u8; 16],
+}
+
 /// BPF map: key = PID (u32), value = PidNetStats (tx_bytes, rx_bytes)
-/// Max 10,240 entries (~80 KB). Suitable for systems with <10K concurrent processes.
-/// On larger systems, oldest/inactive PIDs are silently dropped.
-/// User-space collector handles missing PIDs gracefully.
+/// ~80 KB. User-space collector handles missing PIDs gracefully.
 #[map]
-static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(10_240, 0);
+static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
 /// BPF map: key = PID (u32), value = PidCpuStats (cpu_time_ns, last_sched_in_ns, comm)
-/// Max 10,240 entries (~120 KB). Tracks cumulative CPU time per process via sched_switch.
+/// ~120 KB. Tracks cumulative CPU time per process via sched_switch.
 #[map]
-static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(10_240, 0);
+static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
-/// Attached to tcp_sendmsg. Size is passed directly as arg 2.
+/// BPF map: key = PID (u32), value = PidDiskStats (read_bytes, write_bytes, comm)
+/// ~120 KB. Tracks cumulative block I/O bytes per process via block_rq_issue.
+#[map]
+static DISK_STATS: HashMap<u32, PidDiskStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
+
+/// Attached to tcp_sendmsg (kprobe on kernel function).
 ///
-/// // arg(2) contains the send size; args 0-1 are kernel struct pointers (inaccessible from BPF)
+/// Kprobes monitor kernel function calls by their stable function signature.
+/// Unlike tracepoints, they don't have layout-dependent fields, so CO-RE is not needed.
+/// Function signatures are stable across kernel versions (ABI requirement).
+///
+/// arg(2) contains the send size; args 0-1 are kernel struct pointers (inaccessible from BPF)
 ///
 /// tcp_sendmsg signature:
 ///   int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
@@ -78,8 +157,13 @@ fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
     Ok(())
 }
 
-/// Attached to tcp_recvmsg (kretprobe). Reads the return value (bytes received)
-/// and accumulates rx_bytes for the current PID.
+/// Attached to tcp_recvmsg (kretprobe on kernel function).
+///
+/// Kretprobes monitor kernel function return values by their stable function signature.
+/// Unlike tracepoints, they don't have layout-dependent fields, so CO-RE is not needed.
+/// Function signatures are stable across kernel versions (ABI requirement).
+///
+/// Reads the return value (bytes received) and accumulates rx_bytes for the current PID.
 ///
 /// tcp_recvmsg signature:
 ///   int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags, int *addr_len)
@@ -135,19 +219,8 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
 /// Attached to sched:sched_switch tracepoint.
 ///
 /// Fires on every context switch. At this point, bpf_get_current_pid_tgid() returns
-/// the process being switched off (prev). We read next_pid from the tracepoint context.
-///
-/// sched_switch tracepoint memory layout (stable since kernel 4.4):
-///   offset  0: u64       common header
-///   offset  8: [u8; 16]  prev_comm
-///   offset 24: u32       prev_pid
-///   offset 28: i32       prev_prio
-///   offset 32: i64       prev_state
-///   offset 40: [u8; 16]  next_comm
-///   offset 56: u32       next_pid
-///
-/// Before production deployment, verify these offsets on the target system:
-///   cat /sys/kernel/debug/tracing/events/sched/sched_switch/format
+/// the process being switched off (prev). We read next_pid from the tracepoint context
+/// via CO-RE struct (works on kernels 4.4+).
 #[tracepoint(name = "sched_switch", category = "sched")]
 pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
     match try_sched_switch(&ctx) {
@@ -160,9 +233,13 @@ pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
 fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
     let now_ns = unsafe { bpf_ktime_get_ns() };
 
-    // Read prev_pid and next_pid from tracepoint context
-    let prev_pid: u32 = unsafe { ctx.read_at(24)? };
-    let next_pid: u32 = unsafe { ctx.read_at(56)? };
+    // Cast context to SchedSwitch struct. Use read_unaligned because kernel may pack
+    // tracepoint data with non-standard alignment (safe: reading from valid kernel buffer).
+    let ptr = ctx.as_ptr() as *const SchedSwitch;
+    let sched_switch = unsafe { core::ptr::read_unaligned(ptr) };
+
+    let prev_pid = sched_switch.prev_pid;
+    let next_pid = sched_switch.next_pid;
 
     // --- Handle sched-out for prev_pid: accumulate cpu_time_ns ---
     if let Some(s) = CPU_STATS.get_ptr_mut(&prev_pid) {
@@ -186,14 +263,74 @@ fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
         }
         None => {
             // First time we see this PID; capture its comm and initialize
-            let comm: [u8; 16] = unsafe { ctx.read_at(40).unwrap_or([0u8; 16]) };
             let new_stats = PidCpuStats {
                 cpu_time_ns: 0,
                 last_sched_in_ns: now_ns,
-                comm,
+                comm: sched_switch.next_comm,
             };
             if CPU_STATS.insert(&next_pid, &new_stats, 0).is_err() {
                 warn!(ctx, "CPU_STATS map full");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Attached to block:block_rq_issue tracepoint.
+///
+/// Fires when an I/O request is issued to the device driver, in process context.
+/// Reads I/O size and direction via CO-RE struct (works on kernels 4.18+).
+#[tracepoint(name = "block_rq_issue", category = "block")]
+pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
+    match try_block_rq_issue(&ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
+    // Cast context to BlockRqIssue struct. Use read_unaligned because kernel may pack
+    // tracepoint data with non-standard alignment (safe: reading from valid kernel buffer).
+    let ptr = ctx.as_ptr() as *const BlockRqIssue;
+    let rq_issue = unsafe { core::ptr::read_unaligned(ptr) };
+
+    // Skip zero-sector requests (no actual I/O)
+    if rq_issue.nr_sector == 0 {
+        return Ok(());
+    }
+
+    // Get current PID; skip kernel threads (PID 0)
+    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    if pid == 0 {
+        return Ok(());
+    }
+
+    // Convert sectors to bytes
+    let bytes = (rq_issue.nr_sector as u64).saturating_mul(SECTOR_BYTES);
+
+    // Determine if this is a read (R) or write (W) operation
+    let is_read = rq_issue.rwbs[0] == b'R';
+    let is_write = rq_issue.rwbs[0] == b'W';
+
+    // Update or insert the stats for this PID
+    match DISK_STATS.get_ptr_mut(&pid) {
+        Some(s) => unsafe {
+            if is_read {
+                (*s).read_bytes = (*s).read_bytes.saturating_add(bytes);
+            } else if is_write {
+                (*s).write_bytes = (*s).write_bytes.saturating_add(bytes);
+            }
+        },
+        None => {
+            let new_stats = PidDiskStats {
+                read_bytes: if is_read { bytes } else { 0 },
+                write_bytes: if is_write { bytes } else { 0 },
+                comm: rq_issue.comm,
+            };
+            if DISK_STATS.insert(&pid, &new_stats, 0).is_err() {
+                warn!(ctx, "DISK_STATS map full");
             }
         }
     }

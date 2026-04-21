@@ -7,6 +7,7 @@
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 use crate::error::CollectorError;
+use crate::util::{comm_to_string, run_collector_loop};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -144,95 +145,27 @@ impl CpuCollector {
     }
 
     /// Run the CPU collection loop.
-    ///
-    /// Polls for CPU metrics at the configured interval using tokio::select!
-    /// Sends CollectorEvents through the provided channel. Exits when shutdown signal triggers.
     pub async fn run(
-        mut self,
+        self,
         tx: mpsc::Sender<CollectorEvent>,
-        mut shutdown: watch::Receiver<bool>,
+        shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
-        let mut ticker = tokio::time::interval(POLL_INTERVAL);
-
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    // Collect CPU metrics
-                    for record in self.collect_cpu(POLL_INTERVAL)? {
-                        if let MetricPayload::Cpu(_) = &record.payload {
-                            let event = CollectorEvent {
-                                app_name: record.app_name.clone(),
-                                payload: record.payload,
-                                timestamp: record.timestamp,
-                            };
-                            if let Err(e) = tx.send(event).await {
-                                log::error!(
-                                    "Failed to send CPU event for app '{}': {}",
-                                    record.app_name,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-
-                _ = shutdown.changed() => {
-                    log::debug!("CPU collector received shutdown signal");
-                    break;
-                }
-            }
-        }
-
-        Ok(())
+        run_collector_loop(
+            self,
+            POLL_INTERVAL,
+            tx,
+            shutdown,
+            |c| c.collect_cpu(POLL_INTERVAL),
+            |p| matches!(p, MetricPayload::Cpu(_)),
+            "CPU",
+        )
+        .await
     }
-}
-
-/// Convert a null-terminated byte array (from kernel comm field) to a String.
-/// Returns None if the comm is empty or invalid UTF-8.
-fn comm_to_string(comm: &[u8; 16]) -> Option<String> {
-    // Find the null terminator
-    let end = comm.iter().position(|&b| b == 0).unwrap_or(16);
-
-    // Empty comm field
-    if end == 0 {
-        return None;
-    }
-
-    // Convert to UTF-8 string, replacing invalid bytes with replacement character
-    Some(String::from_utf8_lossy(&comm[..end]).into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_comm_to_string_valid() {
-        let mut comm = [0u8; 16];
-        b"firefox"
-            .iter()
-            .enumerate()
-            .for_each(|(i, &b)| comm[i] = b);
-        assert_eq!(comm_to_string(&comm), Some("firefox".to_string()));
-    }
-
-    #[test]
-    fn test_comm_to_string_empty() {
-        let comm = [0u8; 16];
-        assert_eq!(comm_to_string(&comm), None);
-    }
-
-    #[test]
-    fn test_comm_to_string_truncated() {
-        let mut comm = [0u8; 16];
-        b"python3.11"
-            .iter()
-            .enumerate()
-            .for_each(|(i, &b)| comm[i] = b);
-        // Manually null-terminate at position 6
-        comm[6] = 0;
-        assert_eq!(comm_to_string(&comm), Some("python".to_string()));
-    }
 
     #[test]
     fn test_delta_calculation_no_previous() {

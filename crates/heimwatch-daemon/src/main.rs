@@ -61,6 +61,16 @@ enum SnapshotCommand {
         #[arg(short, long, default_value = "text")]
         format: String,
     },
+    /// One-shot disk I/O snapshot (attaches eBPF block_rq_issue probe)
+    Disk {
+        /// Observation window in seconds (probe attaches, disk bytes accumulate, then collect)
+        #[arg(short, long, default_value = "5")]
+        window: u64,
+
+        /// Output format: text (human-readable) or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
     /// Focus time snapshot (queries database for focus events)
     Focus {
         /// Query window in seconds (e.g., last 30 seconds of focus data)
@@ -97,6 +107,9 @@ async fn main() -> anyhow::Result<()> {
             }
             SnapshotCommand::Network { window, format } => {
                 snapshot::run_snapshot(window, &format, "network", None).await?;
+            }
+            SnapshotCommand::Disk { window, format } => {
+                snapshot::run_snapshot(window, &format, "disk", None).await?;
             }
             SnapshotCommand::Focus { window, format, db } => {
                 snapshot::run_snapshot(window, &format, "focus", Some(&db)).await?;
