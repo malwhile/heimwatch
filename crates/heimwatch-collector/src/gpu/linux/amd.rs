@@ -4,8 +4,8 @@ use anyhow::Result;
 use heimwatch_core::metrics::{GpuData, GpuVendor};
 use std::path::{Path, PathBuf};
 
-use super::generic;
 use super::GpuBackend;
+use super::generic;
 
 /// AMD GPU backend — reads metrics from amdgpu sysfs.
 pub struct AmdBackend {
@@ -18,7 +18,8 @@ pub struct AmdBackend {
 impl AmdBackend {
     pub fn new(gpu_index: u32, device_path: &Path) -> Result<Self> {
         let hwmon_path = generic::find_hwmon_path(device_path);
-        let name = generic::read_device_name(device_path).unwrap_or_else(|| format!("AMD GPU {}", gpu_index));
+        let name = generic::read_device_name(device_path)
+            .unwrap_or_else(|| format!("AMD GPU {}", gpu_index));
         Ok(AmdBackend {
             gpu_index,
             device_path: device_path.to_path_buf(),
@@ -53,7 +54,8 @@ impl GpuBackend for AmdBackend {
         if let Some(used) = generic::read_sysfs_u64(&self.device_path.join("mem_info_vram_used")) {
             data.vram_used_bytes = Some(used);
         }
-        if let Some(total) = generic::read_sysfs_u64(&self.device_path.join("mem_info_vram_total")) {
+        if let Some(total) = generic::read_sysfs_u64(&self.device_path.join("mem_info_vram_total"))
+        {
             data.vram_total_bytes = Some(total);
         }
 
@@ -98,4 +100,63 @@ fn parse_pp_dpm_clock(device_path: &Path, clock_file: &str) -> Option<u32> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_mock_sysfs(dir: &TempDir, filename: &str, content: &str) {
+        fs::write(dir.path().join(filename), content).unwrap();
+    }
+
+    #[test]
+    fn test_parse_pp_dpm_clock_simple() {
+        let tmp = TempDir::new().unwrap();
+        create_mock_sysfs(&tmp, "pp_dpm_sclk", "0: 300Mhz\n1: 500Mhz *\n");
+        let result = parse_pp_dpm_clock(tmp.path(), "pp_dpm_sclk");
+        assert_eq!(result, Some(500));
+    }
+
+    #[test]
+    fn test_parse_pp_dpm_clock_first_entry() {
+        let tmp = TempDir::new().unwrap();
+        create_mock_sysfs(&tmp, "pp_dpm_sclk", "0: 300Mhz *\n1: 500Mhz\n");
+        let result = parse_pp_dpm_clock(tmp.path(), "pp_dpm_sclk");
+        assert_eq!(result, Some(300));
+    }
+
+    #[test]
+    fn test_parse_pp_dpm_clock_no_current() {
+        let tmp = TempDir::new().unwrap();
+        create_mock_sysfs(&tmp, "pp_dpm_sclk", "0: 300Mhz\n1: 500Mhz\n2: 700Mhz\n");
+        let result = parse_pp_dpm_clock(tmp.path(), "pp_dpm_sclk");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_pp_dpm_clock_whitespace() {
+        let tmp = TempDir::new().unwrap();
+        create_mock_sysfs(&tmp, "pp_dpm_sclk", "  0: 300Mhz  \n  1: 500Mhz  *  \n");
+        let result = parse_pp_dpm_clock(tmp.path(), "pp_dpm_sclk");
+        assert_eq!(result, Some(500));
+    }
+
+    #[test]
+    fn test_parse_pp_dpm_clock_nonexistent() {
+        let tmp = TempDir::new().unwrap();
+        let result = parse_pp_dpm_clock(tmp.path(), "nonexistent");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_amd_backend_new() {
+        let tmp = TempDir::new().unwrap();
+        create_mock_sysfs(&tmp, "product_name", "AMD RX 7900");
+        let backend = AmdBackend::new(0, tmp.path()).unwrap();
+        assert_eq!(backend.gpu_index, 0);
+        assert_eq!(backend.gpu_name(), "AMD RX 7900");
+    }
 }

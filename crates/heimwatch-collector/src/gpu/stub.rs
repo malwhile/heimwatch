@@ -6,7 +6,9 @@ pub struct GpuCollector;
 
 impl GpuCollector {
     pub fn new() -> Result<Self> {
-        Err(anyhow::anyhow!("GPU collection not yet implemented on this platform"))
+        Err(anyhow::anyhow!(
+            "GPU collection not yet implemented on this platform"
+        ))
     }
 
     pub async fn run(

@@ -1,10 +1,10 @@
 //! NVIDIA GPU backend via NVML (feature-gated).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use heimwatch_core::metrics::{GpuData, GpuVendor};
-use std::path::Path;
 use nvml_wrapper::Nvml;
 use nvml_wrapper::enum_wrappers::device::{Clock, ClockId, TemperatureSensor};
+use std::path::Path;
 
 use super::GpuBackend;
 
@@ -20,18 +20,24 @@ impl NvidiaBackend {
     pub fn new(gpu_index: u32, _device_path: &Path) -> Result<Self> {
         // Initialize NVML (requires libnvidia-ml.so at runtime).
         // This will fail gracefully if NVML is not installed.
-        let nvml = Nvml::init()
-            .map_err(|e| anyhow!("NVML initialization failed (NVIDIA driver/library not available): {}", e))?;
+        let nvml = Nvml::init().map_err(|e| {
+            anyhow!(
+                "NVML initialization failed (NVIDIA driver/library not available): {}",
+                e
+            )
+        })?;
 
         // Leak the NVML instance to extend its lifetime to 'static.
         // This is safe because NVML is process-singleton and we never unload it.
         let nvml = Box::leak(Box::new(nvml));
 
         // Get device by index.
-        let nvml_device = nvml.device_by_index(gpu_index)
+        let nvml_device = nvml
+            .device_by_index(gpu_index)
             .map_err(|e| anyhow!("Failed to get NVML device {}: {}", gpu_index, e))?;
 
-        let name = nvml_device.name()
+        let name = nvml_device
+            .name()
             .unwrap_or_else(|_| format!("NVIDIA GPU {}", gpu_index))
             .to_string();
 

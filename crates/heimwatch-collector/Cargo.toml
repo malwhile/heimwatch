@@ -28,3 +28,6 @@ nvml-wrapper = { version = "0.10", optional = true }
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 aya-build.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

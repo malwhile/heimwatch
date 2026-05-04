@@ -843,6 +843,7 @@ dependencies = [
  "heimwatch-storage",
  "log",
  "nvml-wrapper",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "wayland-client",
