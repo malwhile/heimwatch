@@ -1,6 +1,8 @@
 //! Stub GPU collector for non-Linux platforms.
 
 use anyhow::Result;
+use heimwatch_core::CollectorEvent;
+use tokio::sync::{mpsc, watch};
 
 pub struct GpuCollector;
 
@@ -13,8 +15,8 @@ impl GpuCollector {
 
     pub async fn run(
         self,
-        _tx: tokio::sync::mpsc::Sender<crate::util::CollectorEvent>,
-        mut _shutdown: tokio::sync::watch::Receiver<bool>,
+        _tx: mpsc::Sender<CollectorEvent>,
+        mut _shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         unreachable!("GPU collector cannot be created on non-Linux platforms")
     }
