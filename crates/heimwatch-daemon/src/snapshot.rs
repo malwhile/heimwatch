@@ -6,7 +6,7 @@ use heimwatch_storage::StorageLayer;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Capture a snapshot of metrics (network, CPU, disk, memory, or focus) and print results.
+/// Capture a snapshot of metrics (network, CPU, disk, memory, GPU, or focus) and print results.
 ///
 /// Dispatches to platform-specific collectors or database queries based on metric_type.
 pub async fn run_snapshot(
@@ -19,9 +19,10 @@ pub async fn run_snapshot(
         "cpu" => run_cpu_snapshot(window_secs, format).await,
         "disk" => run_disk_snapshot(window_secs, format).await,
         "focus" => run_focus_snapshot(window_secs, format, db_path).await,
+        "gpu" => run_gpu_snapshot(window_secs, format).await,
         "memory" => run_memory_snapshot(window_secs, format).await,
         "network" => run_network_snapshot(window_secs, format).await,
-        _ => anyhow::bail!("Please choose cpu, disk, focus, memory, or network"),
+        _ => anyhow::bail!("Please choose cpu, disk, focus, gpu, memory, or network"),
     }
 }
 
@@ -114,6 +115,27 @@ async fn run_memory_snapshot(window_secs: u64, format: &str) -> Result<()> {
     Ok(())
 }
 
+/// Capture GPU metrics snapshot (polling collection).
+async fn run_gpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
+    if window_secs == 0 {
+        anyhow::bail!("Window must be greater than 0 seconds");
+    }
+
+    log::info!("Polling GPU metrics, observing for {}s...", window_secs);
+    let mut gpu_collector = tokio::task::spawn_blocking(heimwatch_collector::GpuCollector::new)
+        .await?
+        .map_err(|e| anyhow!("GPU metrics unavailable on this platform: {}", e))?;
+
+    tokio::time::sleep(Duration::from_secs(window_secs)).await;
+    let records = tokio::task::spawn_blocking(move || {
+        gpu_collector.collect_gpus(Duration::from_secs(window_secs))
+    })
+    .await??;
+
+    format_output(format, &records, window_secs)?;
+    Ok(())
+}
+
 /// Capture focus time snapshot (database query).
 async fn run_focus_snapshot(window_secs: u64, format: &str, db_path: Option<&str>) -> Result<()> {
     let db_path = db_path.ok_or_else(|| anyhow!("--db argument required for focus snapshot"))?;
@@ -161,6 +183,7 @@ fn print_snapshot_table(records: &[MetricRecord], window_secs: u64) {
         MetricPayload::Dsk(_) => print_disk_table(records, window_secs),
         MetricPayload::Mem(_) => print_memory_table(records, window_secs),
         MetricPayload::Foc(_) => print_focus_table(records, window_secs),
+        MetricPayload::Gpu(_) => print_gpu_table(records, window_secs),
         _ => println!("  (unsupported metric type)"),
     }
 }
@@ -368,6 +391,62 @@ fn print_focus_table(records: &[MetricRecord], window_secs: u64) {
     println!();
 }
 
+/// Print a human-readable table of GPU metrics.
+fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
+    println!("\nHeiwatch GPU Snapshot ({}s window)", window_secs);
+    println!("{}", "─".repeat(100));
+    println!(
+        "  {:<28} {:<8} {:<12} {:<10} {:<10} {:<14}",
+        "GPU", "Vendor", "Usage", "VRAM", "Temp", "Clock"
+    );
+    println!("  {}", "─".repeat(96));
+
+    for r in records {
+        if let MetricPayload::Gpu(gpu) = &r.payload {
+            let vendor_str = match gpu.vendor {
+                heimwatch_core::GpuVendor::Nvidia => "NVIDIA",
+                heimwatch_core::GpuVendor::Amd => "AMD",
+                heimwatch_core::GpuVendor::Intel => "Intel",
+                heimwatch_core::GpuVendor::Unknown => "Unknown",
+            };
+
+            let usage_str = gpu
+                .usage_percent
+                .map(|u| format!("{:>6.1}%", u))
+                .unwrap_or_else(|| "   N/A".to_string());
+
+            let vram_str = match (gpu.vram_used_bytes, gpu.vram_total_bytes) {
+                (Some(used), Some(total)) => {
+                    format!("{}/{}", fmt_bytes(used), fmt_bytes(total))
+                }
+                _ => "N/A".to_string(),
+            };
+
+            let temp_str = gpu
+                .temperature_celsius
+                .map(|t| format!("{:>7.1}°C", t))
+                .unwrap_or_else(|| "  N/A".to_string());
+
+            let clock_str = gpu
+                .core_clock_mhz
+                .map(|c| format!("{:>6} MHz", c))
+                .unwrap_or_else(|| "  N/A".to_string());
+
+            println!(
+                "  {:<28} {:<8} {:>12} {:<10} {:<10} {:<14}",
+                &gpu.name[..gpu.name.len().min(28)],
+                vendor_str,
+                usage_str,
+                vram_str,
+                temp_str,
+                clock_str
+            );
+        }
+    }
+    println!("{}", "─".repeat(100));
+    println!();
+}
+
 /// Format bytes into human-readable units (B, KB, MB, GB).
 fn fmt_bytes(b: u64) -> String {
     const KB: f64 = 1024.0;
@@ -491,6 +570,54 @@ mod tests {
     #[test]
     fn test_print_focus_table_empty() {
         let records: Vec<MetricRecord> = vec![];
+        print_snapshot_table(&records, 5);
+    }
+
+    #[test]
+    fn test_print_gpu_table_empty() {
+        let records: Vec<MetricRecord> = vec![];
+        print_snapshot_table(&records, 5);
+    }
+
+    #[test]
+    fn test_print_gpu_table_with_data() {
+        use heimwatch_core::{GpuData, GpuVendor};
+
+        let records = vec![
+            MetricRecord {
+                app_name: "gpu:0".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Gpu(GpuData {
+                    gpu_index: 0,
+                    vendor: GpuVendor::Nvidia,
+                    name: "NVIDIA GeForce RTX 3090".to_string(),
+                    usage_percent: Some(75.5),
+                    vram_used_bytes: Some(8 * 1024 * 1024 * 1024),
+                    vram_total_bytes: Some(24 * 1024 * 1024 * 1024),
+                    temperature_celsius: Some(65.0),
+                    power_draw_watts: Some(350.0),
+                    core_clock_mhz: Some(2400),
+                    memory_clock_mhz: Some(9000),
+                }),
+            },
+            MetricRecord {
+                app_name: "gpu:1".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Gpu(GpuData {
+                    gpu_index: 1,
+                    vendor: GpuVendor::Amd,
+                    name: "AMD Radeon RX 6900 XT".to_string(),
+                    usage_percent: Some(50.0),
+                    vram_used_bytes: Some(4 * 1024 * 1024 * 1024),
+                    vram_total_bytes: Some(16 * 1024 * 1024 * 1024),
+                    temperature_celsius: Some(60.0),
+                    power_draw_watts: Some(250.0),
+                    core_clock_mhz: Some(2100),
+                    memory_clock_mhz: Some(8000),
+                }),
+            },
+        ];
+
         print_snapshot_table(&records, 5);
     }
 }

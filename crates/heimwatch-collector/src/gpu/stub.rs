@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use heimwatch_core::CollectorEvent;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 pub struct GpuCollector;
@@ -18,6 +19,13 @@ impl GpuCollector {
         _tx: mpsc::Sender<CollectorEvent>,
         mut _shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
+        unreachable!("GPU collector cannot be created on non-Linux platforms")
+    }
+
+    pub fn collect_gpus(
+        &mut self,
+        _interval: Duration,
+    ) -> Result<Vec<heimwatch_core::MetricRecord>> {
         unreachable!("GPU collector cannot be created on non-Linux platforms")
     }
 }

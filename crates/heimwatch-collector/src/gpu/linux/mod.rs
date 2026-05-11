@@ -53,7 +53,10 @@ impl GpuCollector {
     }
 
     /// Collect metrics from all GPU backends.
-    fn collect_gpus(&mut self, _interval: Duration) -> Result<Vec<heimwatch_core::MetricRecord>> {
+    pub fn collect_gpus(
+        &mut self,
+        _interval: Duration,
+    ) -> Result<Vec<heimwatch_core::MetricRecord>> {
         let mut records = Vec::new();
         let timestamp = crate::util::current_unix_timestamp();
 
