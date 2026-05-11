@@ -81,6 +81,16 @@ enum SnapshotCommand {
         #[arg(short, long, default_value = "text")]
         format: String,
     },
+    /// One-shot GPU metrics snapshot (polls sysfs and hwmon)
+    Gpu {
+        /// Observation window in seconds (polling collects metrics)
+        #[arg(short, long, default_value = "5")]
+        window: u64,
+
+        /// Output format: text (human-readable) or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
     /// Focus time snapshot (queries database for focus events)
     Focus {
         /// Query window in seconds (e.g., last 30 seconds of focus data)
@@ -123,6 +133,9 @@ async fn main() -> anyhow::Result<()> {
             }
             SnapshotCommand::Memory { window, format } => {
                 snapshot::run_snapshot(window, &format, "memory", None).await?;
+            }
+            SnapshotCommand::Gpu { window, format } => {
+                snapshot::run_snapshot(window, &format, "gpu", None).await?;
             }
             SnapshotCommand::Focus { window, format, db } => {
                 snapshot::run_snapshot(window, &format, "focus", Some(&db)).await?;

@@ -84,7 +84,7 @@ test-nocapture:
 	cargo nextest run --workspace -- --nocapture
 
 test-all:
-	cargo test --workspace --verbose
+	cargo test --workspace --all-features --verbose
 
 check:
 	cargo check
@@ -97,7 +97,7 @@ fmt-check:
 	cargo fmt -- --check
 
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Installation of tools
 install-tools:

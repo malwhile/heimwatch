@@ -2,8 +2,16 @@
 
 use anyhow::Result;
 use heimwatch_core::{CollectorEvent, MetricPayload, MetricRecord};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
+
+/// Get the current Unix timestamp (seconds since epoch).
+pub fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 
 /// Convert a null-terminated byte array (from kernel comm field) to a String.
 /// Returns None if the comm is empty or invalid UTF-8.

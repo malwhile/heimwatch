@@ -91,11 +91,28 @@ pub struct DiskData {
     pub mount_point: String,
 }
 
+/// GPU vendor identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GpuVendor {
+    Nvidia,
+    Amd,
+    Intel,
+    Unknown,
+}
+
 /// GPU usage data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuData {
-    pub usage_percent: f32,
-    pub vram_used_bytes: u64,
+    pub gpu_index: u32,
+    pub vendor: GpuVendor,
+    pub name: String,
+    pub usage_percent: Option<f32>,
+    pub vram_used_bytes: Option<u64>,
+    pub vram_total_bytes: Option<u64>,
+    pub temperature_celsius: Option<f32>,
+    pub power_draw_watts: Option<f32>,
+    pub core_clock_mhz: Option<u32>,
+    pub memory_clock_mhz: Option<u32>,
 }
 
 /// Tagged union of all metric payload types.
