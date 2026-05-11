@@ -185,14 +185,29 @@ fn print_snapshot_table(records: &[MetricRecord], window_secs: u64) {
         MetricPayload::Foc(_) => print_focus_table(records, window_secs),
         MetricPayload::Gpu(_) => {
             // Separate aggregate and per-process GPU records
-            let gpu_records: Vec<_> = records.iter().filter(|r| matches!(r.payload, MetricPayload::Gpu(_))).collect();
-            let gpu_proc_records: Vec<_> = records.iter().filter(|r| matches!(r.payload, MetricPayload::GpuProc(_))).collect();
+            let gpu_records: Vec<_> = records
+                .iter()
+                .filter(|r| matches!(r.payload, MetricPayload::Gpu(_)))
+                .collect();
+            let gpu_proc_records: Vec<_> = records
+                .iter()
+                .filter(|r| matches!(r.payload, MetricPayload::GpuProc(_)))
+                .collect();
 
             if !gpu_records.is_empty() {
-                print_gpu_table(&gpu_records.iter().map(|r| (*r).clone()).collect::<Vec<_>>(), window_secs);
+                print_gpu_table(
+                    &gpu_records.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
+                    window_secs,
+                );
             }
             if !gpu_proc_records.is_empty() {
-                print_gpu_proc_table(&gpu_proc_records.iter().map(|r| (*r).clone()).collect::<Vec<_>>(), window_secs);
+                print_gpu_proc_table(
+                    &gpu_proc_records
+                        .iter()
+                        .map(|r| (*r).clone())
+                        .collect::<Vec<_>>(),
+                    window_secs,
+                );
             }
         }
         MetricPayload::GpuProc(_) => {
@@ -464,7 +479,10 @@ fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
 
 /// Print a human-readable table of per-process GPU usage by application.
 fn print_gpu_proc_table(records: &[MetricRecord], window_secs: u64) {
-    println!("\nHeiwatch GPU Per-Process Snapshot ({}s window)", window_secs);
+    println!(
+        "\nHeiwatch GPU Per-Process Snapshot ({}s window)",
+        window_secs
+    );
     println!("{}", "─".repeat(68));
     println!(
         "  {:<28} {:<6} {:>12} {:>12}",
