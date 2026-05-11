@@ -233,10 +233,11 @@ mod tests {
                 let entry = entry.ok()?;
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
-                if name_str.starts_with("card") && !name_str.contains('-') {
-                    if let Ok(idx) = name_str[4..].parse::<u32>() {
-                        return Some((idx, entry.path()));
-                    }
+                if name_str.starts_with("card")
+                    && !name_str.contains('-')
+                    && let Ok(idx) = name_str[4..].parse::<u32>()
+                {
+                    return Some((idx, entry.path()));
                 }
                 None
             })

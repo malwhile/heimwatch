@@ -19,8 +19,6 @@ This is a Rust workspace with the following planned crates:
 - **`heimwatch-tui`**: Ratatui-based terminal interface
 - **`heimwatch-daemon`**: Service management (systemd, launchd, etc.)
 
-Currently in **Phase 1** (scaffolding). See README roadmap for implementation phases.
-
 ## Common Development Commands
 
 ```bash

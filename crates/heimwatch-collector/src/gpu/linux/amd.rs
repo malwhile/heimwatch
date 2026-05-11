@@ -80,7 +80,7 @@ impl GpuBackend for AmdBackend {
 /// Parse AMD pp_dpm_sclk or pp_dpm_mclk files.
 /// Format: lines like "0: 300Mhz" with the current state marked with "*".
 /// Example:
-/// ```
+/// ```text
 /// 0: 300Mhz
 /// 1: 500Mhz *
 /// ```
