@@ -47,6 +47,9 @@ pub fn read_hwmon_power_watts(hwmon: &Path) -> Option<f32> {
 /// Used as fallback when no vendor-specific backend is available.
 pub struct GenericBackend {
     gpu_index: u32,
+    #[allow(dead_code)]
+    device_path: PathBuf,
+    pci_address: String,
     hwmon_path: Option<PathBuf>,
     name: String,
 }
@@ -55,8 +58,11 @@ impl GenericBackend {
     pub fn new(gpu_index: u32, device_path: &Path) -> Self {
         let hwmon_path = find_hwmon_path(device_path);
         let name = read_device_name(device_path).unwrap_or_else(|| format!("GPU {}", gpu_index));
+        let pci_address = read_pci_slot_name(device_path).unwrap_or_default();
         GenericBackend {
             gpu_index,
+            device_path: device_path.to_path_buf(),
+            pci_address,
             hwmon_path,
             name,
         }
@@ -89,6 +95,14 @@ impl GpuBackend for GenericBackend {
     fn gpu_name(&self) -> &str {
         &self.name
     }
+
+    fn pci_address(&self) -> &str {
+        &self.pci_address
+    }
+
+    fn gpu_index(&self) -> u32 {
+        self.gpu_index
+    }
 }
 
 /// Read the device name from sysfs (product_name or PCI subsystem description).
@@ -104,6 +118,16 @@ pub fn read_device_name(device_path: &Path) -> Option<String> {
     }
 
     None
+}
+
+/// Read the PCI slot name (e.g., "0000:c5:00.0") from a device's uevent file.
+pub fn read_pci_slot_name(device_path: &Path) -> Option<String> {
+    let uevent = fs::read_to_string(device_path.join("uevent")).ok()?;
+    uevent
+        .lines()
+        .find(|l| l.starts_with("PCI_SLOT_NAME="))
+        .and_then(|l| l.split_once('='))
+        .map(|(_, v)| v.trim().to_string())
 }
 
 #[cfg(test)]

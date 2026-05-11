@@ -15,6 +15,7 @@ pub enum MetricType {
     Mem,
     Dsk,
     Gpu,
+    GpuProc,
 }
 
 /// All metric types in order. Used for iterating across all metric types.
@@ -27,6 +28,7 @@ pub const ALL_METRIC_TYPES: &[MetricType] = &[
     MetricType::Mem,
     MetricType::Dsk,
     MetricType::Gpu,
+    MetricType::GpuProc,
 ];
 
 impl MetricType {
@@ -40,6 +42,7 @@ impl MetricType {
             MetricType::Mem => "mem",
             MetricType::Dsk => "dsk",
             MetricType::Gpu => "gpu",
+            MetricType::GpuProc => "gpc",
         }
     }
 }
@@ -115,6 +118,16 @@ pub struct GpuData {
     pub memory_clock_mhz: Option<u32>,
 }
 
+/// Per-process GPU usage, collected via /proc/<pid>/fdinfo DRM scanning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuProcessData {
+    pub gpu_index: u32,
+    /// GFX engine utilization % over the poll interval (None if no engine data available).
+    pub usage_percent: Option<f32>,
+    /// VRAM held by this process across all its DRM fds (bytes).
+    pub vram_used_bytes: Option<u64>,
+}
+
 /// Tagged union of all metric payload types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -133,6 +146,8 @@ pub enum MetricPayload {
     Dsk(DiskData),
     #[serde(rename = "gpu")]
     Gpu(GpuData),
+    #[serde(rename = "gpu_proc")]
+    GpuProc(GpuProcessData),
 }
 
 impl MetricPayload {
@@ -146,6 +161,7 @@ impl MetricPayload {
             MetricPayload::Mem(_) => MetricType::Mem,
             MetricPayload::Dsk(_) => MetricType::Dsk,
             MetricPayload::Gpu(_) => MetricType::Gpu,
+            MetricPayload::GpuProc(_) => MetricType::GpuProc,
         }
     }
 }
