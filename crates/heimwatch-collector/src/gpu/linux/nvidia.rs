@@ -12,12 +12,13 @@ use super::GpuBackend;
 /// Requires: nvml-wrapper crate (optional feature); NVML library at runtime.
 pub struct NvidiaBackend {
     gpu_index: u32,
+    pci_address: String,
     nvml_device: nvml_wrapper::Device<'static>,
     name: String,
 }
 
 impl NvidiaBackend {
-    pub fn new(gpu_index: u32, _device_path: &Path) -> Result<Self> {
+    pub fn new(gpu_index: u32, device_path: &Path) -> Result<Self> {
         // Initialize NVML (requires libnvidia-ml.so at runtime).
         // This will fail gracefully if NVML is not installed.
         let nvml = Nvml::init().map_err(|e| {
@@ -41,8 +42,11 @@ impl NvidiaBackend {
             .unwrap_or_else(|_| format!("NVIDIA GPU {}", gpu_index))
             .to_string();
 
+        let pci_address = super::generic::read_pci_slot_name(device_path).unwrap_or_default();
+
         Ok(NvidiaBackend {
             gpu_index,
+            pci_address,
             nvml_device,
             name,
         })
@@ -98,5 +102,13 @@ impl GpuBackend for NvidiaBackend {
 
     fn gpu_name(&self) -> &str {
         &self.name
+    }
+
+    fn pci_address(&self) -> &str {
+        &self.pci_address
+    }
+
+    fn gpu_index(&self) -> u32 {
+        self.gpu_index
     }
 }

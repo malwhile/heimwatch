@@ -126,11 +126,11 @@ async fn run_gpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
         .await?
         .map_err(|e| anyhow!("GPU metrics unavailable on this platform: {}", e))?;
 
+    // Baseline poll (populates prev_fdinfo for per-process delta calculation)
+    let _ = gpu_collector.collect_gpus(Duration::from_secs(1))?;
+
     tokio::time::sleep(Duration::from_secs(window_secs)).await;
-    let records = tokio::task::spawn_blocking(move || {
-        gpu_collector.collect_gpus(Duration::from_secs(window_secs))
-    })
-    .await??;
+    let records = gpu_collector.collect_gpus(Duration::from_secs(window_secs))?;
 
     format_output(format, &records, window_secs)?;
     Ok(())
@@ -183,7 +183,37 @@ fn print_snapshot_table(records: &[MetricRecord], window_secs: u64) {
         MetricPayload::Dsk(_) => print_disk_table(records, window_secs),
         MetricPayload::Mem(_) => print_memory_table(records, window_secs),
         MetricPayload::Foc(_) => print_focus_table(records, window_secs),
-        MetricPayload::Gpu(_) => print_gpu_table(records, window_secs),
+        MetricPayload::Gpu(_) => {
+            // Separate aggregate and per-process GPU records
+            let gpu_records: Vec<_> = records
+                .iter()
+                .filter(|r| matches!(r.payload, MetricPayload::Gpu(_)))
+                .collect();
+            let gpu_proc_records: Vec<_> = records
+                .iter()
+                .filter(|r| matches!(r.payload, MetricPayload::GpuProc(_)))
+                .collect();
+
+            if !gpu_records.is_empty() {
+                print_gpu_table(
+                    &gpu_records.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
+                    window_secs,
+                );
+            }
+            if !gpu_proc_records.is_empty() {
+                print_gpu_proc_table(
+                    &gpu_proc_records
+                        .iter()
+                        .map(|r| (*r).clone())
+                        .collect::<Vec<_>>(),
+                    window_secs,
+                );
+            }
+        }
+        MetricPayload::GpuProc(_) => {
+            // Handle per-process GPU records
+            print_gpu_proc_table(records, window_secs);
+        }
         _ => println!("  (unsupported metric type)"),
     }
 }
@@ -444,6 +474,62 @@ fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
         }
     }
     println!("{}", "─".repeat(100));
+    println!();
+}
+
+/// Print a human-readable table of per-process GPU usage by application.
+fn print_gpu_proc_table(records: &[MetricRecord], window_secs: u64) {
+    println!(
+        "\nHeiwatch GPU Per-Process Snapshot ({}s window)",
+        window_secs
+    );
+    println!("{}", "─".repeat(68));
+    println!(
+        "  {:<28} {:<6} {:>12} {:>12}",
+        "App", "GPU", "Usage", "VRAM"
+    );
+    println!("  {}", "─".repeat(64));
+
+    // Sort by usage descending
+    let mut sorted: Vec<_> = records.iter().collect();
+    sorted.sort_by(|a, b| {
+        let usage_a = if let MetricPayload::GpuProc(proc) = &a.payload {
+            proc.usage_percent.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let usage_b = if let MetricPayload::GpuProc(proc) = &b.payload {
+            proc.usage_percent.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        usage_b
+            .partial_cmp(&usage_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for r in sorted {
+        if let MetricPayload::GpuProc(proc) = &r.payload {
+            let usage_str = proc
+                .usage_percent
+                .map(|u| format!("{:>10.1}%", u))
+                .unwrap_or_else(|| "       N/A".to_string());
+
+            let vram_str = proc
+                .vram_used_bytes
+                .map(fmt_bytes)
+                .unwrap_or_else(|| "N/A".to_string());
+
+            println!(
+                "  {:<28} {:<6} {:<12} {:>12}",
+                &r.app_name[..r.app_name.len().min(28)],
+                proc.gpu_index,
+                usage_str,
+                vram_str
+            );
+        }
+    }
+    println!("{}", "─".repeat(68));
     println!();
 }
 

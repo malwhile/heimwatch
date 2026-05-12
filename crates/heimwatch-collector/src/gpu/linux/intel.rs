@@ -12,6 +12,7 @@ use super::generic;
 pub struct IntelBackend {
     gpu_index: u32,
     device_path: PathBuf,
+    pci_address: String,
     hwmon_path: Option<PathBuf>,
     name: String,
 }
@@ -21,9 +22,11 @@ impl IntelBackend {
         let hwmon_path = generic::find_hwmon_path(device_path);
         let name = generic::read_device_name(device_path)
             .unwrap_or_else(|| format!("Intel GPU {}", gpu_index));
+        let pci_address = generic::read_pci_slot_name(device_path).unwrap_or_default();
         Ok(IntelBackend {
             gpu_index,
             device_path: device_path.to_path_buf(),
+            pci_address,
             hwmon_path,
             name,
         })
@@ -62,6 +65,14 @@ impl GpuBackend for IntelBackend {
 
     fn gpu_name(&self) -> &str {
         &self.name
+    }
+
+    fn pci_address(&self) -> &str {
+        &self.pci_address
+    }
+
+    fn gpu_index(&self) -> u32 {
+        self.gpu_index
     }
 }
 
