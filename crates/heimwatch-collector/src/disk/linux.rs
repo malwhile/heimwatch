@@ -13,7 +13,6 @@ use aya::maps::HashMap as AyaHashMap;
 use aya::programs::TracePoint;
 use heimwatch_core::{
     CollectorEvent, DiskData, MetricPayload, MetricRecord, current_unix_timestamp,
-    process::get_process_name,
 };
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -30,10 +29,9 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 struct LocalPidDiskStats {
     read_bytes: u64,
     write_bytes: u64,
-    comm: [u8; 16],
 }
 
-// Safety: repr(C), all fields (u64, u64, [u8; 16]) are valid for all bit patterns, no padding.
+// Safety: repr(C), all fields (u64, u64) are valid for all bit patterns, no padding.
 unsafe impl aya::Pod for LocalPidDiskStats {}
 
 /// Embedded BPF object, compiled by build.rs at build time.
@@ -78,30 +76,22 @@ impl DiskCollector {
             .map_mut("DISK_STATS")
             .ok_or_else(|| CollectorError::MapNotFound("DISK_STATS".to_string()))?;
 
-        let stats_map: AyaHashMap<_, u32, LocalPidDiskStats> = AyaHashMap::try_from(map_ref)?;
+        // Map is now keyed by process name ([u8; 16]), not PID
+        let stats_map: AyaHashMap<_, [u8; 16], LocalPidDiskStats> = AyaHashMap::try_from(map_ref)?;
 
-        // Aggregate current totals by app name
+        // Process names are keys; no need to aggregate further
         let mut current_read: HashMap<String, u64> = HashMap::new();
         let mut current_write: HashMap<String, u64> = HashMap::new();
 
         for entry in stats_map.iter() {
-            let (pid, local_stats) = entry?;
+            let (comm, local_stats) = entry?;
 
-            if pid == 0 {
-                continue;
-            }
+            // Convert process name to string (null-terminated)
+            let app_name = comm_to_string(&comm)
+                .unwrap_or_else(|| "(unknown)".to_string());
 
-            let app_name = get_process_name(pid)
-                .ok()
-                .or_else(|| comm_to_string(&local_stats.comm))
-                .unwrap_or_else(|| format!("pid:{}", pid));
-
-            // Aggregate: if multiple PIDs belong to the same app, sum their I/O bytes
-            let read_entry = current_read.entry(app_name.clone()).or_insert(0);
-            *read_entry = read_entry.saturating_add(local_stats.read_bytes);
-
-            let write_entry = current_write.entry(app_name).or_insert(0);
-            *write_entry = write_entry.saturating_add(local_stats.write_bytes);
+            current_read.insert(app_name.clone(), local_stats.read_bytes);
+            current_write.insert(app_name, local_stats.write_bytes);
         }
 
         let mut records = Vec::new();

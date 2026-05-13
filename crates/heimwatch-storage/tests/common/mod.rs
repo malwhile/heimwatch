@@ -29,25 +29,26 @@ pub fn create_test_db() -> (StorageLayer, TempDir) {
 pub struct CpuMetricBuilder {
     app_name: String,
     timestamp: u64,
-    usage_percent: f32,
-    core_count: u32,
+    cpu_time_ns: u64,
+    cpu_usage_percent: f32,
 }
 
 impl CpuMetricBuilder {
     /// Create a new CPU metric builder with required fields.
-    pub fn new(app_name: impl Into<String>, timestamp: u64, usage_percent: f32) -> Self {
+    /// cpu_time_ns is the absolute CPU time in nanoseconds.
+    pub fn new(app_name: impl Into<String>, timestamp: u64, cpu_time_ns: u64) -> Self {
         Self {
             app_name: app_name.into(),
             timestamp,
-            usage_percent,
-            core_count: 4,
+            cpu_time_ns,
+            cpu_usage_percent: 0.0,
         }
     }
 
-    /// Set the core count (default: 4).
+    /// Set the CPU usage percentage (default: 0.0).
     #[allow(dead_code)]
-    pub fn with_core_count(mut self, count: u32) -> Self {
-        self.core_count = count;
+    pub fn with_usage_percent(mut self, percent: f32) -> Self {
+        self.cpu_usage_percent = percent;
         self
     }
 
@@ -57,8 +58,8 @@ impl CpuMetricBuilder {
             app_name: self.app_name,
             timestamp: self.timestamp,
             payload: MetricPayload::Cpu(CpuData {
-                usage_percent: self.usage_percent,
-                core_count: self.core_count,
+                cpu_time_ns: self.cpu_time_ns,
+                cpu_usage_percent: self.cpu_usage_percent,
             }),
         }
     }
@@ -106,9 +107,10 @@ impl NetworkMetricBuilder {
     }
 }
 
-/// Helper for creating a CPU metric record with default core count.
-pub fn make_cpu_record(app_name: &str, timestamp: u64, usage_percent: f32) -> MetricRecord {
-    CpuMetricBuilder::new(app_name, timestamp, usage_percent).build()
+/// Helper for creating a CPU metric record.
+/// cpu_time_ns is the absolute CPU time in nanoseconds.
+pub fn make_cpu_record(app_name: &str, timestamp: u64, cpu_time_ns: u64) -> MetricRecord {
+    CpuMetricBuilder::new(app_name, timestamp, cpu_time_ns).build()
 }
 
 /// Helper for creating a network metric record with default connections.

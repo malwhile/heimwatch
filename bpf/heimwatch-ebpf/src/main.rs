@@ -14,7 +14,7 @@
 //! and don't require CO-RE because they monitor stable kernel function signatures (ABI-guaranteed).
 
 use aya_ebpf::{
-    helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns},
+    helpers::{bpf_get_current_comm, bpf_ktime_get_ns},
     macros::{kprobe, kretprobe, map, tracepoint},
     maps::HashMap,
     programs::{ProbeContext, RetProbeContext, TracePointContext},
@@ -35,72 +35,23 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
 
-/// sched_switch tracepoint struct for CO-RE field discovery.
-/// Fields match kernel's internal layout (stable since kernel 4.4).
-#[repr(C)]
-struct SchedSwitch {
-    /// Common tracepoint header
-    _common_type: u32,
-    _common_flags: u32,
-    _common_preempt_count: i32,
-    _common_pid: i32,
-
-    /// Process being switched off
-    prev_comm: [u8; 16],
-    prev_pid: u32,
-    prev_prio: i32,
-
-    /// Process state bits (see kernel sched.h)
-    prev_state: i64,
-
-    /// Process being switched on
-    next_comm: [u8; 16],
-    next_pid: u32,
-    _next_prio: i32,
-}
-
-/// block_rq_issue tracepoint struct for CO-RE field discovery.
-/// Fields match kernel's internal layout (stable since kernel 4.18).
-#[repr(C)]
-struct BlockRqIssue {
-    /// Common tracepoint header (skipped for now)
-    _common_type: u32,
-    _common_flags: u32,
-    _common_preempt_count: i32,
-    _common_pid: i32,
-
-    /// Block device identifier
-    dev: u32,
-    _pad1: u32,
-
-    /// Starting sector for this I/O
-    sector: u64,
-
-    /// Number of sectors in this request
-    nr_sector: u32,
-    _pad2: u32,
-
-    /// rwbs[0] = 'R' (read), 'W' (write), 'D' (discard), etc.
-    rwbs: [u8; 8],
-
-    /// Process name from task_struct
-    comm: [u8; 16],
-}
-
-/// BPF map: key = PID (u32), value = PidNetStats (tx_bytes, rx_bytes)
-/// ~80 KB. User-space collector handles missing PIDs gracefully.
+/// BPF map: key = process name ([u8; 16]), value = PidNetStats (tx_bytes, rx_bytes)
+/// Keyed by process name instead of PID to avoid PID reuse conflicts.
+/// ~80 KB. User-space collector handles missing process names gracefully.
 #[map]
-static NETWORK_STATS: HashMap<u32, PidNetStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
+static NETWORK_STATS: HashMap<[u8; 16], PidNetStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
-/// BPF map: key = PID (u32), value = PidCpuStats (cpu_time_ns, last_sched_in_ns, comm)
+/// BPF map: key = process name ([u8; 16]), value = PidCpuStats (cpu_time_ns, last_sched_in_ns)
+/// Keyed by process name instead of PID to avoid PID reuse conflicts.
 /// ~120 KB. Tracks cumulative CPU time per process via sched_switch.
 #[map]
-static CPU_STATS: HashMap<u32, PidCpuStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
+static CPU_STATS: HashMap<[u8; 16], PidCpuStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
-/// BPF map: key = PID (u32), value = PidDiskStats (read_bytes, write_bytes, comm)
+/// BPF map: key = process name ([u8; 16]), value = PidDiskStats (read_bytes, write_bytes)
+/// Keyed by process name instead of PID to avoid PID reuse conflicts.
 /// ~120 KB. Tracks cumulative block I/O bytes per process via block_rq_issue.
 #[map]
-static DISK_STATS: HashMap<u32, PidDiskStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
+static DISK_STATS: HashMap<[u8; 16], PidDiskStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
 /// Attached to tcp_sendmsg (kprobe on kernel function).
 ///
@@ -127,20 +78,16 @@ pub fn trace_sendmsg(ctx: ProbeContext) -> u32 {
 fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
     // tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
     // arg(2) = size_t size (the actual byte count to send)
-    // bpf_get_current_pid_tgid() returns {tgid (upper 32), pid (lower 32)}. We use tgid (process) not tid (thread).
     let size: u64 = ctx.arg(2).unwrap_or(0);
 
-    // Get current PID (upper 32 bits of pid_tgid)
-    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    // Capture the current process name (comm field from task_struct)
+    let comm = bpf_get_current_comm().unwrap_or([0u8; 16]);
 
-    // Update or insert the stats for this PID
-    let stats = NETWORK_STATS.get_ptr_mut(&pid);
+    // Update or insert the stats for this process (keyed by comm/name)
+    let stats = NETWORK_STATS.get_ptr_mut(&comm);
     match stats {
         Some(s) => unsafe { (*s).tx_bytes = (*s).tx_bytes.saturating_add(size) },
         None => {
-            // Capture the current process name (comm field from task_struct)
-            let comm = bpf_get_current_comm().unwrap_or([0u8; 16]);
-
             let new_stats = PidNetStats {
                 tx_bytes: size,
                 rx_bytes: 0,
@@ -148,7 +95,7 @@ fn try_sendmsg(ctx: &ProbeContext) -> Result<(), i64> {
             };
             // Attempt to insert; map may be full if many processes are running.
             // Log to kernel trace buffer if insertion fails.
-            if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
+            if NETWORK_STATS.insert(&comm, &new_stats, 0).is_err() {
                 warn!(ctx, "NETWORK_STATS map full");
             }
         }
@@ -189,17 +136,14 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
         return Ok(());
     }
 
-    // Get current PID (upper 32 bits of pid_tgid)
-    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    // Capture the current process name (comm field from task_struct)
+    let comm = bpf_get_current_comm().unwrap_or([0u8; 16]);
 
-    // Update or insert the stats for this PID
-    let stats = NETWORK_STATS.get_ptr_mut(&pid);
+    // Update or insert the stats for this process (keyed by comm/name)
+    let stats = NETWORK_STATS.get_ptr_mut(&comm);
     match stats {
         Some(s) => unsafe { (*s).rx_bytes = (*s).rx_bytes.saturating_add(bytes_received as u64) },
         None => {
-            // Capture the current process name (comm field from task_struct)
-            let comm = bpf_get_current_comm().unwrap_or([0u8; 16]);
-
             let new_stats = PidNetStats {
                 tx_bytes: 0,
                 rx_bytes: bytes_received as u64,
@@ -207,7 +151,7 @@ fn try_recvmsg(ctx: &RetProbeContext) -> Result<(), i64> {
             };
             // Attempt to insert; map may be full if many processes are running.
             // Log to kernel trace buffer if insertion fails.
-            if NETWORK_STATS.insert(&pid, &new_stats, 0).is_err() {
+            if NETWORK_STATS.insert(&comm, &new_stats, 0).is_err() {
                 warn!(ctx, "NETWORK_STATS map full");
             }
         }
@@ -233,48 +177,48 @@ pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
 fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
     let now_ns = unsafe { bpf_ktime_get_ns() };
 
-    // Cast context to SchedSwitch struct. Use read_unaligned because kernel may pack
-    // tracepoint data with non-standard alignment (safe: reading from valid kernel buffer).
-    let ptr = ctx.as_ptr() as *const SchedSwitch;
-    let sched_switch = unsafe { core::ptr::read_unaligned(ptr) };
+    let prev_comm: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(8)? };
+    let next_comm: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(40)? };
 
-    let prev_pid = sched_switch.prev_pid;
-    let next_pid = sched_switch.next_pid;
-
-    // --- Handle sched-out for prev_pid: accumulate cpu_time_ns ---
-    if let Some(s) = CPU_STATS.get_ptr_mut(&prev_pid) {
-        unsafe {
-            let last_in = (*s).last_sched_in_ns;
-            if last_in > 0 {
-                // Process was on-CPU from last_in to now; add delta
-                let delta = now_ns.saturating_sub(last_in);
-                (*s).cpu_time_ns = (*s).cpu_time_ns.saturating_add(delta);
+    // --- Handle sched-out: accumulate CPU time for prev process ---
+    if !is_comm_empty(&prev_comm) {
+        if let Some(s) = CPU_STATS.get_ptr_mut(&prev_comm) {
+            unsafe {
+                let last_in = (*s).last_sched_in_ns;
+                if last_in > 0 {
+                    let delta = now_ns.saturating_sub(last_in);
+                    (*s).cpu_time_ns = (*s).cpu_time_ns.saturating_add(delta);
+                }
+                // Mark as off-CPU
+                (*s).last_sched_in_ns = 0;
             }
-            // Mark as off-CPU
-            (*s).last_sched_in_ns = 0;
         }
     }
 
-    // --- Handle sched-in for next_pid: stamp the start time ---
-    match CPU_STATS.get_ptr_mut(&next_pid) {
-        Some(s) => {
-            // Process already tracked; just update the sched-in timestamp
-            unsafe { (*s).last_sched_in_ns = now_ns }
-        }
-        None => {
-            // First time we see this PID; capture its comm and initialize
-            let new_stats = PidCpuStats {
-                cpu_time_ns: 0,
-                last_sched_in_ns: now_ns,
-                comm: sched_switch.next_comm,
-            };
-            if CPU_STATS.insert(&next_pid, &new_stats, 0).is_err() {
-                warn!(ctx, "CPU_STATS map full");
+    // --- Handle sched-in: stamp start time for next process ---
+    if !is_comm_empty(&next_comm) {
+        match CPU_STATS.get_ptr_mut(&next_comm) {
+            Some(s) => unsafe { (*s).last_sched_in_ns = now_ns },
+            None => {
+                let new_stats = PidCpuStats {
+                    cpu_time_ns: 0,
+                    last_sched_in_ns: now_ns,
+                };
+                if CPU_STATS.insert(&next_comm, &new_stats, 0).is_err() {
+                    warn!(ctx, "CPU_STATS map full");
+                }
             }
         }
     }
 
     Ok(())
+}
+
+/// Helper: check if comm field is empty/all-zeros
+#[inline(always)]
+fn is_comm_empty(comm: &[u8; 16]) -> bool {
+    // Check if first byte is null or if entire comm is zeros
+    comm[0] == 0
 }
 
 /// Attached to block:block_rq_issue tracepoint.
@@ -291,31 +235,33 @@ pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
 
 #[inline(always)]
 fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
-    // Cast context to BlockRqIssue struct. Use read_unaligned because kernel may pack
-    // tracepoint data with non-standard alignment (safe: reading from valid kernel buffer).
-    let ptr = ctx.as_ptr() as *const BlockRqIssue;
-    let rq_issue = unsafe { core::ptr::read_unaligned(ptr) };
+    // Read fields individually from tracepoint context at fixed offsets.
+    // Offsets: nr_sector=32, rwbs=40, comm=48
+    let ctx_ptr = ctx.as_ptr() as *const u8;
+
+    let nr_sector = unsafe { *(ctx_ptr.add(32) as *const u32) };
+    let rwbs = unsafe { *(ctx_ptr.add(40) as *const [u8; 8]) };
+    let comm = unsafe { *(ctx_ptr.add(48) as *const [u8; 16]) };
 
     // Skip zero-sector requests (no actual I/O)
-    if rq_issue.nr_sector == 0 {
+    if nr_sector == 0 {
         return Ok(());
     }
 
-    // Get current PID; skip kernel threads (PID 0)
-    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
-    if pid == 0 {
+    // Skip processes with empty comm (should be rare)
+    if is_comm_empty(&comm) {
         return Ok(());
     }
 
     // Convert sectors to bytes
-    let bytes = (rq_issue.nr_sector as u64).saturating_mul(SECTOR_BYTES);
+    let bytes = (nr_sector as u64).saturating_mul(SECTOR_BYTES);
 
     // Determine if this is a read (R) or write (W) operation
-    let is_read = rq_issue.rwbs[0] == b'R';
-    let is_write = rq_issue.rwbs[0] == b'W';
+    let is_read = rwbs[0] == b'R';
+    let is_write = rwbs[0] == b'W';
 
-    // Update or insert the stats for this PID
-    match DISK_STATS.get_ptr_mut(&pid) {
+    // Update or insert the stats for this process (keyed by comm/name)
+    match DISK_STATS.get_ptr_mut(&comm) {
         Some(s) => unsafe {
             if is_read {
                 (*s).read_bytes = (*s).read_bytes.saturating_add(bytes);
@@ -327,9 +273,8 @@ fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
             let new_stats = PidDiskStats {
                 read_bytes: if is_read { bytes } else { 0 },
                 write_bytes: if is_write { bytes } else { 0 },
-                comm: rq_issue.comm,
             };
-            if DISK_STATS.insert(&pid, &new_stats, 0).is_err() {
+            if DISK_STATS.insert(&comm, &new_stats, 0).is_err() {
                 warn!(ctx, "DISK_STATS map full");
             }
         }

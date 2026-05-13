@@ -140,13 +140,13 @@ impl StorageLayer {
         Ok(results)
     }
 
-    /// Calculate the mean CPU usage for an app over a time range.
+    /// Calculate the mean CPU time (in nanoseconds) for an app over a time range.
     pub fn get_aggregated_cpu(&self, app_name: &str, start: u64, end: u64) -> Result<f32> {
         let records = self.get_metrics_by_app(app_name, start, end)?;
-        let cpu_records: Vec<f32> = records
+        let cpu_records: Vec<u64> = records
             .iter()
             .filter_map(|r| match &r.payload {
-                MetricPayload::Cpu(CpuData { usage_percent, .. }) => Some(*usage_percent),
+                MetricPayload::Cpu(CpuData { cpu_time_ns, .. }) => Some(*cpu_time_ns),
                 _ => None,
             })
             .collect();
@@ -155,7 +155,7 @@ impl StorageLayer {
             return Err(StorageError::NotFound.into());
         }
 
-        let mean = cpu_records.iter().sum::<f32>() / cpu_records.len() as f32;
+        let mean = cpu_records.iter().sum::<u64>() as f32 / cpu_records.len() as f32;
         Ok(mean)
     }
 

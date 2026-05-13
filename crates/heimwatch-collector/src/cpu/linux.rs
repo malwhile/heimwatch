@@ -10,13 +10,13 @@ use crate::error::CollectorError;
 use crate::util::{comm_to_string, run_collector_loop};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::thread;
 
 use aya::Ebpf;
 use aya::maps::HashMap as AyaHashMap;
 use aya::programs::TracePoint;
 use heimwatch_core::{
     CollectorEvent, CpuData, MetricPayload, MetricRecord, current_unix_timestamp,
-    process::get_process_name,
 };
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -30,10 +30,9 @@ use tokio::sync::{mpsc, watch};
 struct LocalPidCpuStats {
     cpu_time_ns: u64,
     last_sched_in_ns: u64,
-    comm: [u8; 16],
 }
 
-// Safety: repr(C), all fields (u64, u64, [u8; 16]) are valid for all bit patterns.
+// Safety: repr(C), all fields (u64, u64) are valid for all bit patterns.
 unsafe impl aya::Pod for LocalPidCpuStats {}
 
 /// Embedded BPF object, compiled by build.rs at build time.
@@ -46,6 +45,9 @@ pub struct CpuCollector {
     /// Previous snapshot: app_name -> cumulative cpu_time_ns.
     /// Keyed by app_name (not PID) to survive PID reuse.
     prev_state: HashMap<String, u64>,
+
+    /// Number of CPU Cores
+    num_cores: u64,
 }
 
 impl CpuCollector {
@@ -62,20 +64,25 @@ impl CpuCollector {
         prog.load()?;
         prog.attach("sched", "sched_switch")?;
 
+        // Get number of CPU cores for percentage calculation
+        let num_cores = thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(1);
+
         Ok(CpuCollector {
             bpf,
             prev_state: HashMap::new(),
+            num_cores,
         })
     }
 
-    /// Poll the BPF map once. Returns one MetricRecord per active app.
+    /// Poll the BPF map once. Returns one MetricRecord per active process.
     ///
     /// Delta calculation:
-    /// - Reads all (pid, PidCpuStats) pairs from the BPF map.
-    /// - Resolves each PID to an app name (kernel comm field preferred, /proc fallback).
-    /// - Aggregates CPU time by app_name (handles multiple PIDs per app).
+    /// - Reads all (process_name, PidCpuStats) pairs from the BPF map.
+    /// - Process name (comm field) is the key, so aggregation happens automatically in eBPF.
     /// - Subtracts previous snapshot to get per-interval deltas.
-    /// - Computes usage_percent = (delta_ns / interval_ns) * 100.
+    /// - Computes cpu_usage_percent = (delta_ns / (interval_ns × num_cores)) × 100.
     pub fn collect_cpu(&mut self, interval: Duration) -> Result<Vec<MetricRecord>> {
         let timestamp = current_unix_timestamp()?;
         let interval_ns = interval.as_nanos() as u64;
@@ -86,53 +93,52 @@ impl CpuCollector {
             .map_mut("CPU_STATS")
             .ok_or_else(|| CollectorError::MapNotFound("CPU_STATS".to_string()))?;
 
-        let stats_map: AyaHashMap<_, u32, LocalPidCpuStats> = AyaHashMap::try_from(map_ref)?;
+        // Map is now keyed by process name ([u8; 16]), not PID
+        let stats_map: AyaHashMap<_, [u8; 16], LocalPidCpuStats> = AyaHashMap::try_from(map_ref)?;
 
-        // Aggregate current totals by app name (multiple PIDs → same app)
+        // Process names are keys; no need to aggregate further
         let mut current_by_app: HashMap<String, u64> = HashMap::new();
 
         for entry in stats_map.iter() {
-            let (pid, local_stats) = entry?;
+            let (comm, local_stats) = entry?;
 
-            // Skip PID 0 (idle/swapper) to avoid noise
-            if pid == 0 {
+            // Convert process name to string (null-terminated)
+            let app_name = comm_to_string(&comm)
+                .unwrap_or_else(|| "(unknown)".to_string());
+
+            current_by_app.insert(app_name, local_stats.cpu_time_ns);
+        }
+
+        // Calculate deltas in nanoseconds
+        let mut records = Vec::new();
+        for (app_name, current_ns) in &current_by_app {
+            // Skip kernel idle tasks (swapper represents CPU idle time, not real work)
+            if app_name.starts_with("swapper") {
                 continue;
             }
 
-            // Resolve app name from multiple sources (in priority order):
-            // 1. Try /proc lookup first (always current for running processes, detects PID reuse)
-            // 2. Fall back to kernel-captured comm (works even after process exits)
-            // 3. Fall back to "pid:XXXX"
-            let app_name = get_process_name(pid)
-                .ok()
-                .or_else(|| comm_to_string(&local_stats.comm))
-                .unwrap_or_else(|| format!("pid:{}", pid));
-
-            // Aggregate: if multiple PIDs belong to the same app, sum their CPU time
-            let entry = current_by_app.entry(app_name).or_insert(0);
-            *entry = entry.saturating_add(local_stats.cpu_time_ns);
-        }
-
-        // Calculate deltas and convert to percentages
-        let mut records = Vec::new();
-        for (app_name, current_ns) in &current_by_app {
             let prev_ns = self.prev_state.get(app_name).copied().unwrap_or(0);
 
             // If current < prev, PID was reused — delta is 0 for this interval
             let delta_ns = current_ns.saturating_sub(prev_ns);
 
             // Only emit a record if there was actual CPU time in this interval
-            if delta_ns > 0 && interval_ns > 0 {
-                let usage_percent = (delta_ns as f64 / interval_ns as f64 * 100.0) as f32;
+            if delta_ns > 0 {
+                // Calculate percentage of total system CPU capacity
+                // Capacity = interval_ns × num_cores (total nanoseconds available across all cores)
+                let total_capacity_ns = interval_ns.saturating_mul(self.num_cores);
+                let cpu_usage_percent = if total_capacity_ns > 0 {
+                    (delta_ns as f64 / total_capacity_ns as f64 * 100.0) as f32
+                } else {
+                    0.0
+                };
+
                 records.push(MetricRecord {
                     app_name: app_name.clone(),
                     timestamp,
                     payload: MetricPayload::Cpu(CpuData {
-                        usage_percent,
-                        // Per-process metric (not system-wide). core_count=1 indicates a single
-                        // process measurement, not that the system has 1 CPU. Storage/TUI layers
-                        // can normalize usage_percent across actual core count if needed.
-                        core_count: 1,
+                        cpu_time_ns: delta_ns,
+                        cpu_usage_percent,
                     }),
                 });
             }
@@ -195,48 +201,38 @@ mod tests {
     }
 
     #[test]
-    fn test_usage_percent_calculation() {
-        // Usage % = (delta_ns / interval_ns) * 100
+    fn test_absolute_cpu_time_500ms() {
+        // Test reporting absolute CPU time (not percentage)
         let delta_ns = 500_000_000u64; // 500ms
-        let interval_ns = 1_000_000_000u64; // 1s
-        let usage_percent = (delta_ns as f64 / interval_ns as f64 * 100.0) as f32;
-        assert!((usage_percent - 50.0).abs() < 0.01);
+        assert_eq!(delta_ns, 500_000_000);
     }
 
     #[test]
-    fn test_usage_percent_bounds_low() {
-        // Very low CPU usage
+    fn test_absolute_cpu_time_1ms() {
+        // Very low CPU usage in nanoseconds
         let delta_ns = 1_000_000u64; // 1ms
-        let interval_ns = 1_000_000_000u64; // 1s
-        let usage_percent = (delta_ns as f64 / interval_ns as f64 * 100.0) as f32;
-        assert!((usage_percent - 0.1).abs() < 0.01);
+        assert_eq!(delta_ns, 1_000_000);
     }
 
     #[test]
-    fn test_usage_percent_bounds_high() {
-        // High CPU usage (nearly 100%)
-        let delta_ns = 999_000_000u64; // 999ms
-        let interval_ns = 1_000_000_000u64; // 1s
-        let usage_percent = (delta_ns as f64 / interval_ns as f64 * 100.0) as f32;
-        assert!((usage_percent - 99.9).abs() < 0.01);
+    fn test_absolute_cpu_time_1s() {
+        // 1 second of CPU time
+        let delta_ns = 1_000_000_000u64; // 1s
+        assert_eq!(delta_ns, 1_000_000_000);
     }
 
     #[test]
-    fn test_usage_percent_with_small_interval() {
-        // Test with 100ms interval
+    fn test_absolute_cpu_time_50ms() {
+        // Test with 50ms CPU time
         let delta_ns = 50_000_000u64; // 50ms
-        let interval_ns = 100_000_000u64; // 100ms
-        let usage_percent = (delta_ns as f64 / interval_ns as f64 * 100.0) as f32;
-        assert!((usage_percent - 50.0).abs() < 0.01);
+        assert_eq!(delta_ns, 50_000_000);
     }
 
     #[test]
-    fn test_usage_percent_with_large_interval() {
-        // Test with 10s interval
+    fn test_absolute_cpu_time_5s() {
+        // 5 seconds of CPU time
         let delta_ns = 5_000_000_000u64; // 5s
-        let interval_ns = 10_000_000_000u64; // 10s
-        let usage_percent = (delta_ns as f64 / interval_ns as f64 * 100.0) as f32;
-        assert!((usage_percent - 50.0).abs() < 0.01);
+        assert_eq!(delta_ns, 5_000_000_000);
     }
 
     #[test]

@@ -33,9 +33,9 @@ async fn test_cpu_collector_initialization() {
     // Test passes whether initialization succeeds or fails - we just verify no panic
 }
 
-/// Test that CPU usage percentage stays in valid bounds [0, 100].
+/// Test that CPU time is reported as absolute nanoseconds.
 #[tokio::test]
-async fn test_cpu_usage_percent_bounds() {
+async fn test_cpu_time_absolute_ns() {
     let collector = match PlatformCollector::new() {
         Ok(mut c) => match c.take_cpu_collector() {
             Some(cc) => cc,
@@ -65,23 +65,18 @@ async fn test_cpu_usage_percent_bounds() {
     let _ = shutdown_tx.send(true);
 
     // Collect events
-    let mut max_usage = 0.0f32;
+    let mut max_time_ns = 0u64;
     let mut event_count = 0;
     while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
         event_count += 1;
         if let MetricPayload::Cpu(cpu) = &event.payload {
-            assert!(
-                cpu.usage_percent >= 0.0 && cpu.usage_percent <= 100.0,
-                "CPU usage {} is out of bounds [0, 100]",
-                cpu.usage_percent
-            );
-            max_usage = max_usage.max(cpu.usage_percent);
+            max_time_ns = max_time_ns.max(cpu.cpu_time_ns);
         }
     }
 
     eprintln!(
-        "CPU integration test: {} events, max usage {:.1}%",
-        event_count, max_usage
+        "CPU integration test: {} events, max CPU time {:.1}ms",
+        event_count, max_time_ns as f64 / 1_000_000.0
     );
     // Note: event_count may be 0 if no process generates CPU during test
 }
@@ -142,7 +137,7 @@ async fn test_cpu_aggregation_multithread() {
             app_usage
                 .entry(event.app_name.clone())
                 .or_default()
-                .push(cpu.usage_percent);
+                .push(cpu.cpu_usage_percent);
         }
     }
 
