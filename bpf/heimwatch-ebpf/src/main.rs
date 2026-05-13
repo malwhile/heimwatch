@@ -49,6 +49,46 @@ static CPU_STATS: HashMap<[u8; 16], PidCpuStats> = HashMap::with_max_entries(BPF
 #[map]
 static DISK_STATS: HashMap<[u8; 16], PidDiskStats> = HashMap::with_max_entries(BPF_MAP_ENTRIES, 0);
 
+/// Mirror of the sched_switch tracepoint context layout.
+/// Layout matches kernel TP_STRUCT__entry in include/trace/events/sched.h.
+/// repr(C) field order determines offsets; no explicit padding needed —
+/// the compiler inserts alignment padding automatically.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct SchedSwitchArgs {
+    common_type: u16,
+    common_flags: u8,
+    common_preempt_count: u8,
+    common_pid: i32,
+    prev_comm: [u8; 16],
+    prev_pid: i32,
+    prev_prio: i32,
+    prev_state: i64,
+    next_comm: [u8; 16],
+    next_pid: i32,
+    next_prio: i32,
+}
+
+/// Mirror of the block_rq tracepoint context layout (kernel 6.19, RWBS_LEN=10).
+/// Used by block_rq_issue, block_rq_insert, block_rq_merge.
+/// Includes the ioprio field (u16) between bytes and rwbs.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct BlockRqIssueArgs {
+    common_type: u16,
+    common_flags: u8,
+    common_preempt_count: u8,
+    common_pid: i32,
+    dev: u32,
+    // 4 bytes implicit padding (sector: u64 requires 8-byte alignment)
+    sector: u64,
+    nr_sector: u32,
+    bytes: u32,
+    ioprio: u16,
+    rwbs: [u8; 10],
+    comm: [u8; 16],
+}
+
 /// Attached to tcp_sendmsg (kprobe on kernel function).
 ///
 /// Kprobes monitor kernel function calls by their stable function signature.
@@ -173,8 +213,9 @@ pub fn trace_sched_switch(ctx: TracePointContext) -> u32 {
 fn try_sched_switch(ctx: &TracePointContext) -> Result<(), i64> {
     let now_ns = unsafe { bpf_ktime_get_ns() };
 
-    let prev_comm: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(8)? };
-    let next_comm: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(40)? };
+    let args: SchedSwitchArgs = unsafe { ctx.read_at(0)? };
+    let prev_comm = args.prev_comm;
+    let next_comm = args.next_comm;
 
     // --- Handle sched-out: accumulate CPU time for prev process ---
     if !is_comm_empty(&prev_comm) {
@@ -231,18 +272,13 @@ pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
 
 #[inline(always)]
 fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
-    // Read the transfer size in bytes (unsigned int bytes; offset 28, size 4)
-    let bytes_u32: u32 = unsafe { ctx.read_at::<u32>(28)? };
-    if bytes_u32 == 0 {
+    let args: BlockRqIssueArgs = unsafe { ctx.read_at(0)? };
+    if args.bytes == 0 {
         return Ok(());
     }
-    let bytes: u64 = bytes_u32 as u64;
-
-    // Read rwbs (char rwbs[10]; offset 34, size 10)
-    let rwbs: [u8; 10] = unsafe { ctx.read_at::<[u8; 10]>(34)? };
-
-    // Read comm (char comm[16]; offset 44, size 16)
-    let comm_raw: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(44)? };
+    let bytes = args.bytes as u64;
+    let rwbs = args.rwbs;
+    let comm_raw = args.comm;
 
     // Skip processes with empty comm (no non-zero byte)
     if is_comm_empty(&comm_raw) {
