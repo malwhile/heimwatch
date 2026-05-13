@@ -150,7 +150,11 @@ fn test_batch_insert() {
     let mut records = Vec::new();
     for i in 0..100 {
         // CPU times from 10ms to 109ms
-        records.push(make_cpu_record("app", 1000 + i as u64, 10_000_000 + i as u64 * 1_000_000));
+        records.push(make_cpu_record(
+            "app",
+            1000 + i as u64,
+            10_000_000 + i as u64 * 1_000_000,
+        ));
     }
 
     db.insert_metrics_batch(&records).unwrap();

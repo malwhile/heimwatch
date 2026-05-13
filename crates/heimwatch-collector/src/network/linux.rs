@@ -103,14 +103,16 @@ impl NetworkCollector {
             let (comm, local_stats) = entry?;
 
             // Convert process name to string (null-terminated)
-            let app_name = comm_to_string(&comm)
-                .unwrap_or_else(|| "(unknown)".to_string());
+            let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
-            current_by_app.insert(app_name, PidNetStats {
-                tx_bytes: local_stats.tx_bytes,
-                rx_bytes: local_stats.rx_bytes,
-                comm,
-            });
+            current_by_app.insert(
+                app_name,
+                PidNetStats {
+                    tx_bytes: local_stats.tx_bytes,
+                    rx_bytes: local_stats.rx_bytes,
+                    comm,
+                },
+            );
         }
 
         // Calculate deltas

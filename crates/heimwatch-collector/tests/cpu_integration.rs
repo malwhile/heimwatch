@@ -76,7 +76,8 @@ async fn test_cpu_time_absolute_ns() {
 
     eprintln!(
         "CPU integration test: {} events, max CPU time {:.1}ms",
-        event_count, max_time_ns as f64 / 1_000_000.0
+        event_count,
+        max_time_ns as f64 / 1_000_000.0
     );
     // Note: event_count may be 0 if no process generates CPU during test
 }

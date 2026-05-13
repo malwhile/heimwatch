@@ -103,8 +103,7 @@ impl CpuCollector {
             let (comm, local_stats) = entry?;
 
             // Convert process name to string (null-terminated)
-            let app_name = comm_to_string(&comm)
-                .unwrap_or_else(|| "(unknown)".to_string());
+            let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
             current_by_app.insert(app_name, local_stats.cpu_time_ns);
         }

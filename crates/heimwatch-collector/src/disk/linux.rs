@@ -87,8 +87,7 @@ impl DiskCollector {
             let (comm, local_stats) = entry?;
 
             // Convert process name to string (null-terminated)
-            let app_name = comm_to_string(&comm)
-                .unwrap_or_else(|| "(unknown)".to_string());
+            let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
             current_read.insert(app_name.clone(), local_stats.read_bytes);
             current_write.insert(app_name, local_stats.write_bytes);

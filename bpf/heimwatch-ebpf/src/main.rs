@@ -18,7 +18,6 @@ use aya_ebpf::{
     macros::{kprobe, kretprobe, map, tracepoint},
     maps::HashMap,
     programs::{ProbeContext, RetProbeContext, TracePointContext},
-    EbpfContext,
 };
 use aya_log_ebpf::warn;
 use heimwatch_ebpf_common::{PidNetStats, PidCpuStats, PidDiskStats};
@@ -235,13 +234,9 @@ pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
 
 #[inline(always)]
 fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
-    // Read fields individually from tracepoint context at fixed offsets.
-    // Offsets: nr_sector=32, rwbs=40, comm=48
-    let ctx_ptr = ctx.as_ptr() as *const u8;
-
-    let nr_sector = unsafe { *(ctx_ptr.add(32) as *const u32) };
-    let rwbs = unsafe { *(ctx_ptr.add(40) as *const [u8; 8]) };
-    let comm = unsafe { *(ctx_ptr.add(48) as *const [u8; 16]) };
+    let nr_sector: u32 = unsafe { ctx.read_at::<u32>(24)? };
+    let rwbs: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(32)? };
+    let comm: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(40)? };
 
     // Skip zero-sector requests (no actual I/O)
     if nr_sector == 0 {
