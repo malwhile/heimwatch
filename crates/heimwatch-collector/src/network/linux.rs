@@ -16,7 +16,6 @@ use aya::programs::KProbe;
 use heimwatch_core::{
     CollectorEvent, MetricPayload, MetricRecord, NetworkData, current_unix_timestamp,
 };
-use heimwatch_ebpf_common::PidNetStats;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
@@ -43,9 +42,9 @@ static BPF_BYTES: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "
 pub struct NetworkCollector {
     /// The loaded eBPF object (owns program fds).
     bpf: Ebpf,
-    /// Previous snapshot: app_name -> PidNetStats totals.
+    /// Previous snapshot: app_name -> (tx_bytes, rx_bytes).
     /// Keyed by app_name (not PID) to survive PID reuse.
-    prev_state: HashMap<String, PidNetStats>,
+    prev_state: HashMap<String, (u64, u64)>,
 }
 
 /// Load and attach a kprobe program.
@@ -96,8 +95,8 @@ impl NetworkCollector {
         // Map is now keyed by process name ([u8; 16]), not PID
         let stats_map: AyaHashMap<_, [u8; 16], LocalPidNetStats> = AyaHashMap::try_from(map_ref)?;
 
-        // Process names are keys; no need to aggregate further
-        let mut current_by_app: HashMap<String, PidNetStats> = HashMap::new();
+        let mut records = Vec::new();
+        let mut new_state: HashMap<String, (u64, u64)> = HashMap::new();
 
         for entry in stats_map.iter() {
             let (comm, local_stats) = entry?;
@@ -105,24 +104,13 @@ impl NetworkCollector {
             // Convert process name to string (null-terminated)
             let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
-            current_by_app.insert(
-                app_name,
-                PidNetStats {
-                    tx_bytes: local_stats.tx_bytes,
-                    rx_bytes: local_stats.rx_bytes,
-                    comm,
-                },
-            );
-        }
-
-        // Calculate deltas
-        let mut records = Vec::new();
-        for (app_name, current) in &current_by_app {
-            let prev = self.prev_state.get(app_name).copied().unwrap_or_default();
+            let current_tx = local_stats.tx_bytes;
+            let current_rx = local_stats.rx_bytes;
+            let (prev_tx, prev_rx) = self.prev_state.get(&app_name).copied().unwrap_or((0, 0));
 
             // If current < prev, PID was reused — delta is 0 for this interval
-            let tx_delta = current.tx_bytes.saturating_sub(prev.tx_bytes);
-            let rx_delta = current.rx_bytes.saturating_sub(prev.rx_bytes);
+            let tx_delta = current_tx.saturating_sub(prev_tx);
+            let rx_delta = current_rx.saturating_sub(prev_rx);
 
             // Only emit a record if there was actual traffic
             if tx_delta > 0 || rx_delta > 0 {
@@ -136,10 +124,12 @@ impl NetworkCollector {
                     }),
                 });
             }
+
+            new_state.insert(app_name, (current_tx, current_rx));
         }
 
         // Update previous state
-        self.prev_state = current_by_app;
+        self.prev_state = new_state;
 
         Ok(records)
     }

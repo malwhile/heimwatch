@@ -96,8 +96,9 @@ impl CpuCollector {
         // Map is now keyed by process name ([u8; 16]), not PID
         let stats_map: AyaHashMap<_, [u8; 16], LocalPidCpuStats> = AyaHashMap::try_from(map_ref)?;
 
-        // Process names are keys; no need to aggregate further
-        let mut current_by_app: HashMap<String, u64> = HashMap::new();
+        let mut records = Vec::new();
+        let mut new_state: HashMap<String, u64> = HashMap::new();
+        let total_capacity_ns = interval_ns.saturating_mul(self.num_cores);
 
         for entry in stats_map.iter() {
             let (comm, local_stats) = entry?;
@@ -105,27 +106,19 @@ impl CpuCollector {
             // Convert process name to string (null-terminated)
             let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
-            current_by_app.insert(app_name, local_stats.cpu_time_ns);
-        }
-
-        // Calculate deltas in nanoseconds
-        let mut records = Vec::new();
-        for (app_name, current_ns) in &current_by_app {
             // Skip kernel idle tasks (swapper represents CPU idle time, not real work)
             if app_name.starts_with("swapper") {
                 continue;
             }
 
-            let prev_ns = self.prev_state.get(app_name).copied().unwrap_or(0);
+            let current_ns = local_stats.cpu_time_ns;
+            let prev_ns = self.prev_state.get(&app_name).copied().unwrap_or(0);
 
             // If current < prev, PID was reused — delta is 0 for this interval
             let delta_ns = current_ns.saturating_sub(prev_ns);
 
             // Only emit a record if there was actual CPU time in this interval
             if delta_ns > 0 {
-                // Calculate percentage of total system CPU capacity
-                // Capacity = interval_ns × num_cores (total nanoseconds available across all cores)
-                let total_capacity_ns = interval_ns.saturating_mul(self.num_cores);
                 let cpu_usage_percent = if total_capacity_ns > 0 {
                     (delta_ns as f64 / total_capacity_ns as f64 * 100.0) as f32
                 } else {
@@ -141,10 +134,12 @@ impl CpuCollector {
                     }),
                 });
             }
+
+            new_state.insert(app_name, current_ns);
         }
 
         // Update previous state
-        self.prev_state = current_by_app;
+        self.prev_state = new_state;
 
         Ok(records)
     }

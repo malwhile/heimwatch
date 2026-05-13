@@ -245,14 +245,7 @@ fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
     let comm_raw: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(44)? };
 
     // Skip processes with empty comm (no non-zero byte)
-    let mut has_nonzero = false;
-    for &b in &comm_raw {
-        if b != 0 {
-            has_nonzero = true;
-            break;
-        }
-    }
-    if !has_nonzero {
+    if is_comm_empty(&comm_raw) {
         return Ok(());
     }
 

@@ -79,9 +79,9 @@ impl DiskCollector {
         // Map is now keyed by process name ([u8; 16]), not PID
         let stats_map: AyaHashMap<_, [u8; 16], LocalPidDiskStats> = AyaHashMap::try_from(map_ref)?;
 
-        // Process names are keys; no need to aggregate further
-        let mut current_read: HashMap<String, u64> = HashMap::new();
-        let mut current_write: HashMap<String, u64> = HashMap::new();
+        let mut records = Vec::new();
+        let mut new_read: HashMap<String, u64> = HashMap::new();
+        let mut new_write: HashMap<String, u64> = HashMap::new();
 
         for entry in stats_map.iter() {
             let (comm, local_stats) = entry?;
@@ -89,19 +89,8 @@ impl DiskCollector {
             // Convert process name to string (null-terminated)
             let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
-            current_read.insert(app_name.clone(), local_stats.read_bytes);
-            current_write.insert(app_name, local_stats.write_bytes);
-        }
-
-        let mut records = Vec::new();
-        // Collect over all app names that appeared in either read or write
-        let mut all_apps: std::collections::HashSet<String> = std::collections::HashSet::new();
-        all_apps.extend(current_read.keys().cloned());
-        all_apps.extend(current_write.keys().cloned());
-
-        for app_name in all_apps {
-            let cur_r = current_read.get(&app_name).copied().unwrap_or(0);
-            let cur_w = current_write.get(&app_name).copied().unwrap_or(0);
+            let cur_r = local_stats.read_bytes;
+            let cur_w = local_stats.write_bytes;
 
             let prev_r = self.prev_read.get(&app_name).copied().unwrap_or(0);
             let prev_w = self.prev_write.get(&app_name).copied().unwrap_or(0);
@@ -126,11 +115,14 @@ impl DiskCollector {
                     }),
                 });
             }
+
+            new_read.insert(app_name.clone(), cur_r);
+            new_write.insert(app_name, cur_w);
         }
 
         // Update previous state
-        self.prev_read = current_read;
-        self.prev_write = current_write;
+        self.prev_read = new_read;
+        self.prev_write = new_write;
 
         Ok(records)
     }
