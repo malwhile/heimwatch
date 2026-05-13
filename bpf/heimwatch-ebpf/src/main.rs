@@ -26,9 +26,6 @@ use heimwatch_ebpf_common::{PidNetStats, PidCpuStats, PidDiskStats};
 /// User-space collector handles missing PIDs gracefully by continuing to next entry.
 const BPF_MAP_ENTRIES: u32 = 10_240;
 
-/// Logical sector size on Linux block devices (bytes).
-const SECTOR_BYTES: u64 = 512;
-
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
@@ -234,29 +231,42 @@ pub fn trace_block_rq_issue(ctx: TracePointContext) -> u32 {
 
 #[inline(always)]
 fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
-    let nr_sector: u32 = unsafe { ctx.read_at::<u32>(24)? };
-    let rwbs: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(32)? };
-    let comm: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(40)? };
+    // Read the transfer size in bytes (unsigned int bytes; offset 28, size 4)
+    let bytes_u32: u32 = unsafe { ctx.read_at::<u32>(28)? };
+    if bytes_u32 == 0 {
+        return Ok(());
+    }
+    let bytes: u64 = bytes_u32 as u64;
 
-    // Skip zero-sector requests (no actual I/O)
-    if nr_sector == 0 {
+    // Read rwbs (char rwbs[10]; offset 34, size 10)
+    let rwbs: [u8; 10] = unsafe { ctx.read_at::<[u8; 10]>(34)? };
+
+    // Read comm (char comm[16]; offset 44, size 16)
+    let comm_raw: [u8; 16] = unsafe { ctx.read_at::<[u8; 16]>(44)? };
+
+    // Skip processes with empty comm (no non-zero byte)
+    let mut has_nonzero = false;
+    for &b in &comm_raw {
+        if b != 0 {
+            has_nonzero = true;
+            break;
+        }
+    }
+    if !has_nonzero {
         return Ok(());
     }
 
-    // Skip processes with empty comm (should be rare)
-    if is_comm_empty(&comm) {
-        return Ok(());
-    }
+    // Normalize comm key: zero-pad already fixed-size array is fine,
+    // but ensure consistent casing for matching (optional).
+    let comm_key = comm_raw;
 
-    // Convert sectors to bytes
-    let bytes = (nr_sector as u64).saturating_mul(SECTOR_BYTES);
+    // Determine if this is a read or write (handle lowercase too)
+    let first = rwbs.get(0).copied().unwrap_or(0);
+    let is_read = first == b'R' || first == b'r';
+    let is_write = first == b'W' || first == b'w';
 
-    // Determine if this is a read (R) or write (W) operation
-    let is_read = rwbs[0] == b'R';
-    let is_write = rwbs[0] == b'W';
-
-    // Update or insert the stats for this process (keyed by comm/name)
-    match DISK_STATS.get_ptr_mut(&comm) {
+    // Update/insert stats keyed by comm (consider using pid instead)
+    match DISK_STATS.get_ptr_mut(&comm_key) {
         Some(s) => unsafe {
             if is_read {
                 (*s).read_bytes = (*s).read_bytes.saturating_add(bytes);
@@ -269,8 +279,9 @@ fn try_block_rq_issue(ctx: &TracePointContext) -> Result<(), i64> {
                 read_bytes: if is_read { bytes } else { 0 },
                 write_bytes: if is_write { bytes } else { 0 },
             };
-            if DISK_STATS.insert(&comm, &new_stats, 0).is_err() {
-                warn!(ctx, "DISK_STATS map full");
+            if DISK_STATS.insert(&comm_key, &new_stats, 0).is_err() {
+                // Best-effort warning; may be no-op in some eBPF environments
+                warn!(ctx, "DISK_STATS map full or insert failed");
             }
         }
     }
