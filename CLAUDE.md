@@ -62,26 +62,26 @@ cargo doc --no-deps --open
 
 ### Tracepoint Field Offset Portability
 
-⚠️ **Current Limitation:** eBPF probes (CPU `sched_switch`, Disk `block_rq_issue`, Network `tcp_sendmsg`/`tcp_recvmsg`) use **hardcoded field offsets** to read tracepoint context data. These offsets can shift between kernel versions (though they're stable in 4.4–6.x).
+✅ **Structural CO-RE Implementation:** eBPF probes (CPU `sched_switch`, Disk `block_rq_issue`) now read tracepoint context as `#[repr(C)]` structs with named fields, eliminating magic offset numbers. Struct layout matches the kernel's tracepoint format at compile time, providing both code clarity and maintainability.
 
 **Verification before first deployment on a new system:**
 
 ```bash
-# CPU: sched_switch offsets
+# CPU: sched_switch layout
 cat /sys/kernel/debug/tracing/events/sched/sched_switch/format
-# Expected: prev_pid@offset 24, next_pid@offset 56
+# Expected: prev_comm@8, next_comm@40 (offsets baked into struct definition)
 
-# Disk: block_rq_issue offsets
+# Disk: block_rq_issue layout
 cat /sys/kernel/debug/tracing/events/block/block_rq_issue/format
-# Expected: nr_sector@offset 24, rwbs@offset 32, comm@offset 40
+# Expected: nr_sector@24, bytes@28, ioprio@32, rwbs@34, comm@44 (offsets baked into struct definition)
 
 # Network: tcp_sendmsg / tcp_recvmsg (kprobes, no tracepoint)
 # No offset verification needed; uses function arguments directly
 ```
 
-If offsets don't match, update the hardcoded values in `bpf/heimwatch-ebpf/src/main.rs` and rebuild.
+If struct layouts don't match (e.g., on a kernel with different ioprio field placement), update the struct definitions in `bpf/heimwatch-ebpf/src/main.rs` (`SchedSwitchArgs`, `BlockRqIssueArgs`) and rebuild.
 
-**Future improvement:** Use **CO-RE (Compile Once Run Everywhere)** with BTF to auto-detect offsets at runtime (aya + Linux 4.18+). See the CO-RE roadmap note below.
+**Future improvement:** Use **true CO-RE with vmlinux bindings** (BTF-relocation at load time) to auto-detect struct field offsets at runtime (aya + Linux 4.18+). See the CO-RE roadmap note below.
 
 Network traffic monitoring uses eBPF (extended Berkeley Packet Filter) for kernel-space byte counting on Linux. The eBPF crates require additional toolchain setup (Linux developers only).
 

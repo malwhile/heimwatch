@@ -250,42 +250,48 @@ fn print_network_table(records: &[MetricRecord], window_secs: u64) {
 
 /// Print a human-readable table of CPU usage by application.
 fn print_cpu_table(records: &[MetricRecord], window_secs: u64) {
-    println!("\nHeiwatch CPU Usage Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(52));
-    println!("  {:<28} {:>20}", "App", "CPU Usage");
-    println!("  {}", "─".repeat(48));
+    println!("\nHeiwatch CPU Snapshot ({}s window)", window_secs);
+    println!("{}", "─".repeat(70));
+    println!("  {:<28} {:>18} {:>18}", "App", "CPU Time", "Usage %");
+    println!("  {}", "─".repeat(66));
 
-    // Sort by usage descending
+    // Sort by CPU time descending
     let mut sorted: Vec<_> = records.iter().collect();
     sorted.sort_by(|a, b| {
-        let usage_a = if let MetricPayload::Cpu(cpu) = &a.payload {
-            cpu.usage_percent
+        let time_a = if let MetricPayload::Cpu(cpu) = &a.payload {
+            cpu.cpu_time_ns
         } else {
-            0.0
+            0
         };
-        let usage_b = if let MetricPayload::Cpu(cpu) = &b.payload {
-            cpu.usage_percent
+        let time_b = if let MetricPayload::Cpu(cpu) = &b.payload {
+            cpu.cpu_time_ns
         } else {
-            0.0
+            0
         };
-        usage_b
-            .partial_cmp(&usage_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        time_b.cmp(&time_a)
     });
 
-    let mut total_usage = 0.0;
+    let mut total_time_ns = 0u64;
+    let mut total_usage_percent = 0.0f32;
     for r in sorted {
         if let MetricPayload::Cpu(cpu) = &r.payload {
             println!(
-                "  {:<28} {:>19.1}%",
+                "  {:<28} {:>18} {:>17.1}%",
                 &r.app_name[..r.app_name.len().min(28)],
-                cpu.usage_percent
+                fmt_cpu_time_ns(cpu.cpu_time_ns),
+                cpu.cpu_usage_percent
             );
-            total_usage += cpu.usage_percent;
+            total_time_ns += cpu.cpu_time_ns;
+            total_usage_percent += cpu.cpu_usage_percent;
         }
     }
-    println!("{}", "─".repeat(52));
-    println!("  {:<28} {:>19.1}%", "Total", total_usage);
+    println!("{}", "─".repeat(70));
+    println!(
+        "  {:<28} {:>18} {:>17.1}%",
+        "Total",
+        fmt_cpu_time_ns(total_time_ns),
+        total_usage_percent
+    );
     println!();
 }
 
@@ -544,6 +550,32 @@ fn fmt_bytes(b: u64) -> String {
         1024..=1_048_575 => format!("{:>6.1} KB", b as f64 / KB),
         1_048_576..=1_073_741_823 => format!("{:>6.1} MB", b as f64 / MB),
         _ => format!("{:>6.1} GB", b as f64 / GB),
+    }
+}
+
+/// Format nanoseconds into human-readable duration (us, ms, s, m, h).
+fn fmt_cpu_time_ns(ns: u64) -> String {
+    const US_PER_NS: f64 = 1.0 / 1_000.0;
+    const MS_PER_NS: f64 = 1.0 / 1_000_000.0;
+    const S_PER_NS: f64 = 1.0 / 1_000_000_000.0;
+
+    match ns {
+        0..=999_999 => format!("{:>6.0} us", ns as f64 * US_PER_NS),
+        1_000_000..=999_999_999 => format!("{:>6.1} ms", ns as f64 * MS_PER_NS),
+        1_000_000_000..=59_999_999_999 => {
+            let secs = ns as f64 * S_PER_NS;
+            format!("{:>6.1} s", secs)
+        }
+        60_000_000_000..=3_599_999_999_999 => {
+            let secs = ns as f64 * S_PER_NS;
+            let mins = secs / 60.0;
+            format!("{:>6.1} m", mins)
+        }
+        _ => {
+            let secs = ns as f64 * S_PER_NS;
+            let hours = secs / 3600.0;
+            format!("{:>6.2} h", hours)
+        }
     }
 }
 

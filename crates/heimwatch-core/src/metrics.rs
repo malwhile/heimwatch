@@ -70,11 +70,14 @@ pub struct FocusData {
     pub duration_ms: u64,
 }
 
-/// CPU usage data.
+/// CPU time and usage data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuData {
-    pub usage_percent: f32,
-    pub core_count: u32,
+    /// Nanoseconds of CPU time consumed in the measurement interval.
+    pub cpu_time_ns: u64,
+    /// Percentage of total system CPU capacity used (0-100 × num_cores).
+    /// Calculated as (cpu_time_ns / (interval_ns × num_cores)) × 100.
+    pub cpu_usage_percent: f32,
 }
 
 /// Memory usage data (aggregated across all processes for an app).

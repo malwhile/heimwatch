@@ -10,7 +10,7 @@ use heimwatch_storage::{CpuData, FocusData, MetricPayload, MetricType, StorageEr
 fn test_insert_and_read_back() {
     let (db, _tmpdir) = create_test_db();
 
-    let record = make_cpu_record("firefox", 1000, 25.5);
+    let record = make_cpu_record("firefox", 1000, 25_500_000); // 25.5 ms in nanoseconds
     db.insert_metric(&record).unwrap();
 
     let results = db.get_metrics_by_type(MetricType::Cpu, 0, 2000).unwrap();
@@ -18,8 +18,8 @@ fn test_insert_and_read_back() {
     assert_eq!(results[0].app_name, "firefox");
     assert_eq!(results[0].timestamp, 1000);
 
-    if let MetricPayload::Cpu(CpuData { usage_percent, .. }) = results[0].payload {
-        assert_eq!(usage_percent, 25.5);
+    if let MetricPayload::Cpu(CpuData { cpu_time_ns, .. }) = results[0].payload {
+        assert_eq!(cpu_time_ns, 25_500_000); // 25.5 ms
     } else {
         panic!("Expected Cpu payload");
     }
@@ -29,9 +29,9 @@ fn test_insert_and_read_back() {
 fn test_time_range_filtering() {
     let (db, _tmpdir) = create_test_db();
 
-    let r1 = make_cpu_record("app", 1000, 10.0);
-    let r2 = make_cpu_record("app", 2000, 20.0);
-    let r3 = make_cpu_record("app", 3000, 30.0);
+    let r1 = make_cpu_record("app", 1000, 10_000_000); // 10 ms
+    let r2 = make_cpu_record("app", 2000, 20_000_000); // 20 ms
+    let r3 = make_cpu_record("app", 3000, 30_000_000); // 30 ms
 
     db.insert_metric(&r1).unwrap();
     db.insert_metric(&r2).unwrap();
@@ -47,9 +47,9 @@ fn test_time_range_filtering() {
 fn test_get_metrics_by_app() {
     let (db, _tmpdir) = create_test_db();
 
-    let r1 = make_cpu_record("firefox", 1000, 10.0);
-    let r2 = make_cpu_record("code", 1000, 20.0);
-    let r3 = make_cpu_record("firefox", 2000, 15.0);
+    let r1 = make_cpu_record("firefox", 1000, 10_000_000); // 10 ms
+    let r2 = make_cpu_record("code", 1000, 20_000_000); // 20 ms
+    let r3 = make_cpu_record("firefox", 2000, 15_000_000); // 15 ms
 
     db.insert_metric(&r1).unwrap();
     db.insert_metric(&r2).unwrap();
@@ -72,16 +72,17 @@ fn test_get_metrics_by_app() {
 fn test_aggregated_cpu() {
     let (db, _tmpdir) = create_test_db();
 
-    let r1 = make_cpu_record("app", 1000, 10.0);
-    let r2 = make_cpu_record("app", 1001, 20.0);
-    let r3 = make_cpu_record("app", 1002, 30.0);
+    // CPU times in nanoseconds (10ms, 20ms, 30ms)
+    let r1 = make_cpu_record("app", 1000, 10_000_000);
+    let r2 = make_cpu_record("app", 1001, 20_000_000);
+    let r3 = make_cpu_record("app", 1002, 30_000_000);
 
     db.insert_metric(&r1).unwrap();
     db.insert_metric(&r2).unwrap();
     db.insert_metric(&r3).unwrap();
 
     let mean = db.get_aggregated_cpu("app", 0, 2000).unwrap();
-    assert_eq!(mean, 20.0);
+    assert_eq!(mean, 20_000_000.0); // Mean of 10ms, 20ms, 30ms = 20ms
 }
 
 #[test]
@@ -120,11 +121,11 @@ fn test_cleanup_old_data() {
     let now = current_unix_timestamp().unwrap();
 
     // Insert a recent record (now)
-    let recent = make_cpu_record("app", now, 10.0);
+    let recent = make_cpu_record("app", now, 10_000_000); // 10 ms
     db.insert_metric(&recent).unwrap();
 
     // Insert an old record (8 days ago)
-    let old = make_cpu_record("app", now - 8 * 86_400, 10.0);
+    let old = make_cpu_record("app", now - 8 * 86_400, 10_000_000); // 10 ms
     db.insert_metric(&old).unwrap();
 
     // Cleanup with 7-day retention
@@ -148,7 +149,12 @@ fn test_batch_insert() {
 
     let mut records = Vec::new();
     for i in 0..100 {
-        records.push(make_cpu_record("app", 1000 + i, 10.0 + i as f32));
+        // CPU times from 10ms to 109ms
+        records.push(make_cpu_record(
+            "app",
+            1000 + i as u64,
+            10_000_000 + i as u64 * 1_000_000,
+        ));
     }
 
     db.insert_metrics_batch(&records).unwrap();
@@ -183,14 +189,14 @@ fn test_metadata_operations() {
 #[test]
 fn test_key_collision_overwrites() {
     let (db, _tmpdir) = create_test_db();
-    let r1 = make_cpu_record("app", 1000, 10.0);
-    let r2 = make_cpu_record("app", 1000, 20.0);
+    let r1 = make_cpu_record("app", 1000, 10_000_000); // 10 ms
+    let r2 = make_cpu_record("app", 1000, 20_000_000); // 20 ms
     db.insert_metric(&r1).unwrap();
     db.insert_metric(&r2).unwrap();
     let results = db.get_metrics_by_type(MetricType::Cpu, 0, 2000).unwrap();
     assert_eq!(results.len(), 1);
     if let MetricPayload::Cpu(cpu_results) = &results[0].payload {
-        assert_eq!(cpu_results.usage_percent, 20.0);
+        assert_eq!(cpu_results.cpu_time_ns, 20_000_000);
     } else {
         panic!("Not a cpu result");
     }
@@ -205,7 +211,7 @@ fn test_concurrent_inserts() {
             let db = Arc::clone(&db);
             std::thread::spawn(move || {
                 for j in 0..10 {
-                    let record = make_cpu_record("app", 1000 + (i * 10 + j) as u64, 10.0);
+                    let record = make_cpu_record("app", 1000 + (i * 10 + j) as u64, 10_000_000); // 10 ms
                     db.insert_metric(&record).unwrap();
                 }
             })
