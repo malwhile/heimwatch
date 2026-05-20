@@ -454,7 +454,7 @@ mod tests {
     fn test_read_sysfs_value_with_whitespace() {
         let tmpdir = TempDir::new().unwrap();
         let mut file = fs::File::create(tmpdir.path().join("capacity")).unwrap();
-        write!(file, "  75  \n").unwrap();
+        writeln!(file, "  75  ").unwrap();
         drop(file);
 
         let value: f32 =
