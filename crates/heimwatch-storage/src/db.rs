@@ -365,11 +365,9 @@ impl StorageLayer {
                         battery_percent,
                         ..
                     }) = &r.payload
-                    {
-                        if !charging && battery_percent.is_some() {
+                        && !charging && battery_percent.is_some() {
                             return Some(r.timestamp);
                         }
-                    }
                     None
                 })
                 .collect()
@@ -377,11 +375,10 @@ impl StorageLayer {
             pwr_records
                 .iter()
                 .filter_map(|r| {
-                    if let MetricPayload::Pwr(PowerData { charging, .. }) = &r.payload {
-                        if *charging {
+                    if let MetricPayload::Pwr(PowerData { charging, .. }) = &r.payload
+                        && *charging {
                             return Some(r.timestamp);
                         }
-                    }
                     None
                 })
                 .collect()
@@ -405,8 +402,8 @@ impl StorageLayer {
 
         // Process CPU
         for record in &cpu_records {
-            if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Cpu(CpuData {
+            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+                && let MetricPayload::Cpu(CpuData {
                     cpu_usage_percent, ..
                 }) = record.payload
                 {
@@ -416,13 +413,12 @@ impl StorageLayer {
                         .cpu_pcts
                         .push(cpu_usage_percent);
                 }
-            }
         }
 
         // Process GPU
         for record in &gpu_records {
-            if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::GpuProc(GpuProcessData {
+            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+                && let MetricPayload::GpuProc(GpuProcessData {
                     usage_percent: Some(pct),
                     ..
                 }) = record.payload
@@ -433,25 +429,23 @@ impl StorageLayer {
                         .gpu_pcts
                         .push(pct);
                 }
-            }
         }
 
         // Process Focus
         for record in &foc_records {
-            if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload {
+            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+                && let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload {
                     app_metrics
                         .entry(record.app_name.clone())
                         .or_default()
                         .focus_ms += duration_ms;
                 }
-            }
         }
 
         // Process Disk
         for record in &dsk_records {
-            if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Dsk(DiskData {
+            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+                && let MetricPayload::Dsk(DiskData {
                     read_bytes,
                     write_bytes,
                     ..
@@ -462,13 +456,12 @@ impl StorageLayer {
                         .or_default()
                         .disk_bytes += read_bytes + write_bytes;
                 }
-            }
         }
 
         // Process Network
         for record in &net_records {
-            if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Net(NetworkData {
+            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+                && let MetricPayload::Net(NetworkData {
                     tx_bytes, rx_bytes, ..
                 }) = record.payload
                 {
@@ -477,20 +470,18 @@ impl StorageLayer {
                         .or_default()
                         .net_bytes += tx_bytes + rx_bytes;
                 }
-            }
         }
 
         // Process Memory
         for record in &mem_records {
-            if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Mem(MemoryData { rss_bytes, .. }) = record.payload {
+            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+                && let MetricPayload::Mem(MemoryData { rss_bytes, .. }) = record.payload {
                     app_metrics
                         .entry(record.app_name.clone())
                         .or_default()
                         .mem_rss
                         .push(rss_bytes);
                 }
-            }
         }
 
         // Compute averages and normalization factors
