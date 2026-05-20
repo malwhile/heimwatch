@@ -17,6 +17,13 @@ use tokio::sync::{mpsc, watch};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
+struct BatteryState {
+    capacity: Option<f32>,
+    current_ua: Option<i64>,
+    voltage_uv: Option<u64>,
+    status: Option<String>,
+}
+
 pub struct PowerCollector {
     battery_path: Option<String>,
     ac_path: Option<String>,
@@ -51,15 +58,19 @@ impl PowerCollector {
         let timestamp = current_unix_timestamp()?;
 
         // Read battery state
-        let (battery_percent, battery_current_ua, battery_voltage_uv, battery_status) =
-            if let Some(ref bat_path) = self.battery_path {
-                read_battery_state(bat_path)?
-            } else {
-                (None, None, None, None)
-            };
+        let battery_state = if let Some(ref bat_path) = self.battery_path {
+            read_battery_state(bat_path)?
+        } else {
+            BatteryState {
+                capacity: None,
+                current_ua: None,
+                voltage_uv: None,
+                status: None,
+            }
+        };
 
         // Determine charging state
-        let charging = if let Some(bat_status) = battery_status {
+        let charging = if let Some(ref bat_status) = battery_state.status {
             bat_status == "Charging"
         } else if let Some(ref ac_path) = self.ac_path {
             read_ac_online(ac_path).unwrap_or(false)
@@ -82,12 +93,12 @@ impl PowerCollector {
             timestamp,
             payload: MetricPayload::Pwr(PowerData {
                 watt_usage,
-                battery_percent,
+                battery_percent: battery_state.capacity,
                 charging,
                 rapl_package_watts,
                 rapl_core_watts: None,
-                battery_current_ua,
-                battery_voltage_uv,
+                battery_current_ua: battery_state.current_ua,
+                battery_voltage_uv: battery_state.voltage_uv,
             }),
         };
 
@@ -148,10 +159,7 @@ fn discover_ac_node(power_supply_dir: &Path) -> Result<Option<String>> {
 }
 
 /// Read battery state from a battery node.
-/// Returns (capacity, current_ua, voltage_uv, status).
-fn read_battery_state(
-    battery_path: &str,
-) -> Result<(Option<f32>, Option<i64>, Option<u64>, Option<String>)> {
+fn read_battery_state(battery_path: &str) -> Result<BatteryState> {
     let capacity = read_sysfs_value::<f32>(&format!("{}/capacity", battery_path)).ok();
     let current_ua = read_sysfs_value::<i64>(&format!("{}/current_now", battery_path)).ok();
     let voltage_uv = read_sysfs_value::<u64>(&format!("{}/voltage_now", battery_path)).ok();
@@ -159,7 +167,12 @@ fn read_battery_state(
         .ok()
         .map(|s| s.trim().to_string());
 
-    Ok((capacity, current_ua, voltage_uv, status))
+    Ok(BatteryState {
+        capacity,
+        current_ua,
+        voltage_uv,
+        status,
+    })
 }
 
 /// Read AC online status from an AC adapter node.
