@@ -360,7 +360,12 @@ impl StorageLayer {
             pwr_records
                 .iter()
                 .filter_map(|r| {
-                    if let MetricPayload::Pwr(PowerData { charging, battery_percent, .. }) = &r.payload {
+                    if let MetricPayload::Pwr(PowerData {
+                        charging,
+                        battery_percent,
+                        ..
+                    }) = &r.payload
+                    {
                         if !charging && battery_percent.is_some() {
                             return Some(r.timestamp);
                         }
@@ -401,7 +406,10 @@ impl StorageLayer {
         // Process CPU
         for record in &cpu_records {
             if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Cpu(CpuData { cpu_usage_percent, .. }) = record.payload {
+                if let MetricPayload::Cpu(CpuData {
+                    cpu_usage_percent, ..
+                }) = record.payload
+                {
                     app_metrics
                         .entry(record.app_name.clone())
                         .or_default()
@@ -414,7 +422,11 @@ impl StorageLayer {
         // Process GPU
         for record in &gpu_records {
             if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::GpuProc(GpuProcessData { usage_percent: Some(pct), .. }) = record.payload {
+                if let MetricPayload::GpuProc(GpuProcessData {
+                    usage_percent: Some(pct),
+                    ..
+                }) = record.payload
+                {
                     app_metrics
                         .entry(record.app_name.clone())
                         .or_default()
@@ -439,7 +451,12 @@ impl StorageLayer {
         // Process Disk
         for record in &dsk_records {
             if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Dsk(DiskData { read_bytes, write_bytes, .. }) = record.payload {
+                if let MetricPayload::Dsk(DiskData {
+                    read_bytes,
+                    write_bytes,
+                    ..
+                }) = record.payload
+                {
                     app_metrics
                         .entry(record.app_name.clone())
                         .or_default()
@@ -451,7 +468,10 @@ impl StorageLayer {
         // Process Network
         for record in &net_records {
             if on_battery.is_none() || on_battery_set.contains(&record.timestamp) {
-                if let MetricPayload::Net(NetworkData { tx_bytes, rx_bytes, .. }) = record.payload {
+                if let MetricPayload::Net(NetworkData {
+                    tx_bytes, rx_bytes, ..
+                }) = record.payload
+                {
                     app_metrics
                         .entry(record.app_name.clone())
                         .or_default()
@@ -479,15 +499,8 @@ impl StorageLayer {
             .map(|m| m.disk_bytes)
             .max()
             .unwrap_or(1);
-        let max_net_bytes = app_metrics
-            .values()
-            .map(|m| m.net_bytes)
-            .max()
-            .unwrap_or(1);
-        let total_mem_rss: u64 = app_metrics
-            .values()
-            .flat_map(|m| &m.mem_rss)
-            .sum();
+        let max_net_bytes = app_metrics.values().map(|m| m.net_bytes).max().unwrap_or(1);
+        let total_mem_rss: u64 = app_metrics.values().flat_map(|m| &m.mem_rss).sum();
 
         // Compute power scores (with intermediate scores for contribution tracking)
         #[derive(Default)]
@@ -523,8 +536,7 @@ impl StorageLayer {
                 };
 
                 let net_normalized = if max_net_bytes > 0 {
-                    ((metrics.net_bytes as f32 + 1.0).log2()
-                        / (max_net_bytes as f32 + 1.0).log2())
+                    ((metrics.net_bytes as f32 + 1.0).log2() / (max_net_bytes as f32 + 1.0).log2())
                         * 100.0
                 } else {
                     0.0
@@ -596,7 +608,11 @@ impl StorageLayer {
         let mut power_stats = final_stats;
 
         // Sort by power_pct descending
-        power_stats.sort_by(|a, b| b.power_pct.partial_cmp(&a.power_pct).unwrap_or(std::cmp::Ordering::Equal));
+        power_stats.sort_by(|a, b| {
+            b.power_pct
+                .partial_cmp(&a.power_pct)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(power_stats)
     }
