@@ -24,6 +24,17 @@ struct BatteryState {
     status: Option<String>,
 }
 
+impl Default for BatteryState {
+    fn default() -> Self {
+        BatteryState {
+            capacity: None,
+            current_ua: None,
+            voltage_uv: None,
+            status: None,
+        }
+    }
+}
+
 pub struct PowerCollector {
     battery_path: Option<String>,
     ac_path: Option<String>,
@@ -42,7 +53,7 @@ impl PowerCollector {
 
         if battery_path.is_none() && ac_path.is_none() {
             return Err(anyhow::anyhow!(
-                "Power collection not yet implemented: no battery or AC supply found"
+                "Power collection unavailable: no battery or AC adapter found (check /sys/class/power_supply/ permissions)"
             ));
         }
 
@@ -61,19 +72,17 @@ impl PowerCollector {
         let battery_state = if let Some(ref bat_path) = self.battery_path {
             read_battery_state(bat_path)?
         } else {
-            BatteryState {
-                capacity: None,
-                current_ua: None,
-                voltage_uv: None,
-                status: None,
-            }
+            BatteryState::default()
         };
 
         // Determine charging state
         let charging = if let Some(ref bat_status) = battery_state.status {
             bat_status == "Charging"
         } else if let Some(ref ac_path) = self.ac_path {
-            read_ac_online(ac_path).unwrap_or(false)
+            read_ac_online(ac_path).unwrap_or_else(|e| {
+                log::warn!("Failed to read AC online status from {}: {}", ac_path, e);
+                false
+            })
         } else {
             false
         };
@@ -82,7 +91,10 @@ impl PowerCollector {
         let (rapl_package_watts, watt_usage) = if let Some(ref rapl_path) = self.rapl_energy_path {
             match read_rapl_power(rapl_path, &mut self.prev_rapl_energy_uj) {
                 Ok(watts) => (Some(watts), watts),
-                Err(_) => (None, 0.0),
+                Err(e) => {
+                    log::debug!("RAPL read error (may be temporary): {}", e);
+                    (None, 0.0)
+                }
             }
         } else {
             (None, 0.0)
@@ -194,6 +206,9 @@ where
 }
 
 /// Discover RAPL energy counter path.
+///
+/// Currently only checks intel-rapl:0 (Intel single-socket). Phase 4 enhancement:
+/// support multi-socket systems (intel-rapl:1, :2) and AMD RAPL paths.
 fn discover_rapl_energy_path() -> Option<String> {
     let rapl_path = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj";
     if Path::new(rapl_path).exists() {
