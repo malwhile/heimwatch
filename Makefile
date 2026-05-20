@@ -97,7 +97,7 @@ fmt-check:
 	cargo fmt -- --check
 
 lint:
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --workspace --all-targets --all-features --fix -- -D warnings
 
 # Installation of tools
 install-tools:
