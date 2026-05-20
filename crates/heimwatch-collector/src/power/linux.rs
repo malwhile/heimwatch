@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
+#[derive(Default)]
 struct BatteryState {
     capacity: Option<f32>,
     current_ua: Option<i64>,
@@ -24,16 +25,6 @@ struct BatteryState {
     status: Option<String>,
 }
 
-impl Default for BatteryState {
-    fn default() -> Self {
-        BatteryState {
-            capacity: None,
-            current_ua: None,
-            voltage_uv: None,
-            status: None,
-        }
-    }
-}
 
 pub struct PowerCollector {
     battery_path: Option<String>,
