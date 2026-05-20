@@ -633,3 +633,233 @@ impl StorageLayer {
         Ok(power_stats)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Helper to create a temporary database.
+    fn temp_db() -> (TempDir, StorageLayer) {
+        let tmpdir = TempDir::new().unwrap();
+        let db = StorageLayer::open(tmpdir.path().to_str().unwrap()).unwrap();
+        (tmpdir, db)
+    }
+
+    /// Test get_power_state_at returns most recent record at or before timestamp.
+    #[test]
+    fn test_get_power_state_at_returns_most_recent() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert power records at timestamps 1000, 2000, 3000
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 10.0,
+                battery_percent: Some(80.0),
+                charging: false,
+                rapl_package_watts: Some(10.0),
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 2000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 15.0,
+                battery_percent: Some(70.0),
+                charging: true,
+                rapl_package_watts: Some(15.0),
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 3000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 20.0,
+                battery_percent: Some(60.0),
+                charging: false,
+                rapl_package_watts: Some(20.0),
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        // Query at timestamp 2500 should return 2000's record
+        let power = db.get_power_state_at(2500).unwrap();
+        assert!(power.is_some());
+        let data = power.unwrap();
+        assert_eq!(data.battery_percent, Some(70.0));
+        assert!(data.charging);
+
+        // Query at timestamp 3500 should return 3000's record
+        let power = db.get_power_state_at(3500).unwrap();
+        assert!(power.is_some());
+        let data = power.unwrap();
+        assert_eq!(data.battery_percent, Some(60.0));
+        assert!(!data.charging);
+    }
+
+    /// Test get_power_state_at returns None when no records exist before timestamp.
+    #[test]
+    fn test_get_power_state_at_no_records_before() {
+        let (_tmpdir, db) = temp_db();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 2000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 10.0,
+                battery_percent: Some(80.0),
+                charging: false,
+                rapl_package_watts: None,
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        // Query at timestamp 1000 (before any records) should return None
+        let power = db.get_power_state_at(1000).unwrap();
+        assert!(power.is_none());
+    }
+
+    /// Test get_power_state_at returns record at exact timestamp.
+    #[test]
+    fn test_get_power_state_at_exact_timestamp() {
+        let (_tmpdir, db) = temp_db();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 10.0,
+                battery_percent: Some(50.0),
+                charging: true,
+                rapl_package_watts: Some(10.0),
+                rapl_core_watts: None,
+                battery_current_ua: Some(-100),
+                battery_voltage_uv: Some(12_000_000),
+            }),
+        })
+        .unwrap();
+
+        // Query at exact timestamp should return the record
+        let power = db.get_power_state_at(1000).unwrap();
+        assert!(power.is_some());
+        let data = power.unwrap();
+        assert_eq!(data.battery_percent, Some(50.0));
+        assert!(data.charging);
+        assert_eq!(data.battery_current_ua, Some(-100));
+        assert_eq!(data.battery_voltage_uv, Some(12_000_000));
+    }
+
+    /// Test backwards compatibility: old PowerData (4 fields) deserializes to new PowerData (8 fields).
+    #[test]
+    fn test_backwards_compatibility_old_powerdata() {
+        // Simulate old MetricRecord with PowerData containing only 4 fields
+        let old_json = r#"
+        {
+            "app_name": "system",
+            "timestamp": 1000,
+            "payload": {
+                "type": "pwr",
+                "data": {
+                    "watt_usage": 15.5,
+                    "battery_percent": 75.0,
+                    "charging": true
+                }
+            }
+        }
+        "#;
+
+        let record: MetricRecord = serde_json::from_str(old_json).unwrap();
+        assert_eq!(record.app_name, "system");
+        assert_eq!(record.timestamp, 1000);
+
+        if let MetricPayload::Pwr(data) = record.payload {
+            assert_eq!(data.watt_usage, 15.5);
+            assert_eq!(data.battery_percent, Some(75.0));
+            assert!(data.charging);
+            // New optional fields should be None
+            assert_eq!(data.rapl_package_watts, None);
+            assert_eq!(data.rapl_core_watts, None);
+            assert_eq!(data.battery_current_ua, None);
+            assert_eq!(data.battery_voltage_uv, None);
+        } else {
+            panic!("Expected Pwr payload");
+        }
+    }
+
+    /// Test new PowerData with all 8 fields serializes and deserializes correctly.
+    #[test]
+    fn test_new_powerdata_full_serialization() {
+        let original = PowerData {
+            watt_usage: 20.5,
+            battery_percent: Some(60.0),
+            charging: false,
+            rapl_package_watts: Some(18.5),
+            rapl_core_watts: Some(10.2),
+            battery_current_ua: Some(-500),
+            battery_voltage_uv: Some(11_500_000),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: PowerData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.watt_usage, 20.5);
+        assert_eq!(deserialized.battery_percent, Some(60.0));
+        assert!(!deserialized.charging);
+        assert_eq!(deserialized.rapl_package_watts, Some(18.5));
+        assert_eq!(deserialized.rapl_core_watts, Some(10.2));
+        assert_eq!(deserialized.battery_current_ua, Some(-500));
+        assert_eq!(deserialized.battery_voltage_uv, Some(11_500_000));
+    }
+
+    /// Test MetricRecord with PowerData round-trip serialization.
+    #[test]
+    fn test_metric_record_powerdata_roundtrip() {
+        let original = MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 1234567890,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 25.0,
+                battery_percent: Some(45.0),
+                charging: true,
+                rapl_package_watts: Some(22.0),
+                rapl_core_watts: None,
+                battery_current_ua: Some(-1000),
+                battery_voltage_uv: Some(12_500_000),
+            }),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: MetricRecord = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.app_name, "system");
+        assert_eq!(deserialized.timestamp, 1234567890);
+
+        if let MetricPayload::Pwr(data) = deserialized.payload {
+            assert_eq!(data.watt_usage, 25.0);
+            assert_eq!(data.battery_percent, Some(45.0));
+            assert!(data.charging);
+            assert_eq!(data.rapl_package_watts, Some(22.0));
+            assert_eq!(data.battery_current_ua, Some(-1000));
+        } else {
+            panic!("Expected Pwr payload");
+        }
+    }
+}
