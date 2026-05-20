@@ -110,6 +110,20 @@ pub async fn run(db_path: &str) -> Result<()> {
         log::debug!("Memory tracking unavailable on this platform");
     }
 
+    // Spawn power collector (async task)
+    if let Some(pc) = collector.take_power_collector() {
+        log::info!("Power tracking active");
+        let tx = event_tx.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            if let Err(e) = pc.run(tx, shutdown).await {
+                log::error!("Power tracking error: {}", e);
+            }
+        });
+    } else {
+        log::debug!("Power tracking unavailable on this platform");
+    }
+
     // Drop the original event_tx so the channel closes when all collectors exit
     drop(event_tx);
 

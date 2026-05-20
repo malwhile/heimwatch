@@ -11,6 +11,7 @@ pub mod focus;
 pub mod gpu;
 pub mod memory;
 pub mod network;
+pub mod power;
 pub mod util;
 
 use anyhow::Result;
@@ -21,6 +22,7 @@ pub use focus::FocusCollector;
 pub use gpu::GpuCollector;
 pub use memory::MemoryCollector;
 pub use network::NetworkCollector;
+pub use power::PowerCollector;
 
 /// Unified collector that delegates to platform-specific collectors.
 ///
@@ -34,6 +36,7 @@ pub struct PlatformCollector {
     disk: Option<DiskCollector>,
     memory: Option<MemoryCollector>,
     gpu: Option<GpuCollector>,
+    power: Option<PowerCollector>,
 }
 
 impl PlatformCollector {
@@ -101,6 +104,18 @@ impl PlatformCollector {
             }
         };
 
+        let power = match PowerCollector::new() {
+            Ok(pc) => Some(pc),
+            Err(e) => {
+                if e.to_string().contains("not yet implemented") {
+                    log::debug!("Power collection not available: {}", e);
+                } else {
+                    log::warn!("Power collector initialization failed: {}", e);
+                }
+                None
+            }
+        };
+
         Ok(PlatformCollector {
             network,
             focus_collector,
@@ -108,6 +123,7 @@ impl PlatformCollector {
             disk,
             memory,
             gpu,
+            power,
         })
     }
 
@@ -153,5 +169,12 @@ impl PlatformCollector {
     /// This is used by the daemon to run GPU collection in a separate tokio task.
     pub fn take_gpu_collector(&mut self) -> Option<GpuCollector> {
         self.gpu.take()
+    }
+
+    /// Extracts the power collector for spawning as an independent task.
+    ///
+    /// This is used by the daemon to run power collection in a separate tokio task.
+    pub fn take_power_collector(&mut self) -> Option<PowerCollector> {
+        self.power.take()
     }
 }

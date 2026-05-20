@@ -324,6 +324,26 @@ impl StorageLayer {
         Ok(stats)
     }
 
+    /// Get the most recent power state record at or before the given timestamp.
+    ///
+    /// This is used to determine whether a metric was recorded while the system
+    /// was on battery or plugged in. Returns None if no power records exist at or before
+    /// the timestamp.
+    pub fn get_power_state_at(&self, timestamp: u64) -> Result<Option<PowerData>> {
+        let tree = self.metrics_tree()?;
+        let range_start = crate::keys::range_start(&MetricType::Pwr, 0);
+        let range_end = crate::keys::range_end(&MetricType::Pwr, timestamp);
+
+        for item in tree.range(range_start..=range_end).rev() {
+            let (_key, value) = item?;
+            let record: MetricRecord = serde_json::from_slice(&value)?;
+            if let MetricPayload::Pwr(power_data) = record.payload {
+                return Ok(Some(power_data));
+            }
+        }
+        Ok(None)
+    }
+
     /// Compute per-app power consumption statistics over a time range.
     ///
     /// Uses the fixed-weight power attribution formula from the power plan:

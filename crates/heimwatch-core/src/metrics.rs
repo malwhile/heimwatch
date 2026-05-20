@@ -58,9 +58,15 @@ pub struct NetworkData {
 /// Power consumption data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PowerData {
-    pub watt_usage: f32,
-    pub battery_percent: Option<f32>,
-    pub charging: bool,
+    pub watt_usage: f32,              // RAPL package watts if available, else 0.0
+    pub battery_percent: Option<f32>, // 0–100, None if no battery present
+    pub charging: bool,               // any AC online OR battery status == "Charging"
+
+    // Optional fields for future use and breakdown
+    pub rapl_package_watts: Option<f32>, // measured CPU package power from RAPL
+    pub rapl_core_watts: Option<f32>,    // optional: CPU core domain (PP0) from RAPL
+    pub battery_current_ua: Option<i64>, // µA, negative = discharging
+    pub battery_voltage_uv: Option<u64>, // µV
 }
 
 /// Window focus data.
