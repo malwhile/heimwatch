@@ -194,3 +194,18 @@ pub struct AppFocusStats {
     pub app_name: String,
     pub total_duration_ms: u64,
 }
+
+/// Per-app power consumption statistics aggregated across a time range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppPowerStats {
+    pub app_name: String,
+    pub power_pct: f32,                 // 0–100, share of system power
+    pub power_score: f32,               // unnormalized composite score
+    pub on_battery: bool,               // from nearest Pwr record
+    pub cpu_contribution: f32,          // 0–1, fractional contribution from CPU
+    pub gpu_contribution: f32,          // 0–1
+    pub display_contribution: f32,      // 0–1, fractional contribution from screen focus time
+    pub disk_contribution: f32,         // 0–1
+    pub net_contribution: f32,          // 0–1
+    pub mem_contribution: f32,          // 0–1
+}
