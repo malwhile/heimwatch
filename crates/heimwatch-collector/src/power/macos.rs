@@ -6,6 +6,7 @@ use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
+#[allow(unused_imports)]
 use heimwatch_core::{CollectorEvent, MetricPayload};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
