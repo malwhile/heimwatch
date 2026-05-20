@@ -365,9 +365,11 @@ impl StorageLayer {
                         battery_percent,
                         ..
                     }) = &r.payload
-                        && !charging && battery_percent.is_some() {
-                            return Some(r.timestamp);
-                        }
+                        && !charging
+                        && battery_percent.is_some()
+                    {
+                        return Some(r.timestamp);
+                    }
                     None
                 })
                 .collect()
@@ -376,9 +378,10 @@ impl StorageLayer {
                 .iter()
                 .filter_map(|r| {
                     if let MetricPayload::Pwr(PowerData { charging, .. }) = &r.payload
-                        && *charging {
-                            return Some(r.timestamp);
-                        }
+                        && *charging
+                    {
+                        return Some(r.timestamp);
+                    }
                     None
                 })
                 .collect()
@@ -406,13 +409,13 @@ impl StorageLayer {
                 && let MetricPayload::Cpu(CpuData {
                     cpu_usage_percent, ..
                 }) = record.payload
-                {
-                    app_metrics
-                        .entry(record.app_name.clone())
-                        .or_default()
-                        .cpu_pcts
-                        .push(cpu_usage_percent);
-                }
+            {
+                app_metrics
+                    .entry(record.app_name.clone())
+                    .or_default()
+                    .cpu_pcts
+                    .push(cpu_usage_percent);
+            }
         }
 
         // Process GPU
@@ -422,24 +425,25 @@ impl StorageLayer {
                     usage_percent: Some(pct),
                     ..
                 }) = record.payload
-                {
-                    app_metrics
-                        .entry(record.app_name.clone())
-                        .or_default()
-                        .gpu_pcts
-                        .push(pct);
-                }
+            {
+                app_metrics
+                    .entry(record.app_name.clone())
+                    .or_default()
+                    .gpu_pcts
+                    .push(pct);
+            }
         }
 
         // Process Focus
         for record in &foc_records {
             if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
-                && let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload {
-                    app_metrics
-                        .entry(record.app_name.clone())
-                        .or_default()
-                        .focus_ms += duration_ms;
-                }
+                && let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload
+            {
+                app_metrics
+                    .entry(record.app_name.clone())
+                    .or_default()
+                    .focus_ms += duration_ms;
+            }
         }
 
         // Process Disk
@@ -450,12 +454,12 @@ impl StorageLayer {
                     write_bytes,
                     ..
                 }) = record.payload
-                {
-                    app_metrics
-                        .entry(record.app_name.clone())
-                        .or_default()
-                        .disk_bytes += read_bytes + write_bytes;
-                }
+            {
+                app_metrics
+                    .entry(record.app_name.clone())
+                    .or_default()
+                    .disk_bytes += read_bytes + write_bytes;
+            }
         }
 
         // Process Network
@@ -464,24 +468,25 @@ impl StorageLayer {
                 && let MetricPayload::Net(NetworkData {
                     tx_bytes, rx_bytes, ..
                 }) = record.payload
-                {
-                    app_metrics
-                        .entry(record.app_name.clone())
-                        .or_default()
-                        .net_bytes += tx_bytes + rx_bytes;
-                }
+            {
+                app_metrics
+                    .entry(record.app_name.clone())
+                    .or_default()
+                    .net_bytes += tx_bytes + rx_bytes;
+            }
         }
 
         // Process Memory
         for record in &mem_records {
             if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
-                && let MetricPayload::Mem(MemoryData { rss_bytes, .. }) = record.payload {
-                    app_metrics
-                        .entry(record.app_name.clone())
-                        .or_default()
-                        .mem_rss
-                        .push(rss_bytes);
-                }
+                && let MetricPayload::Mem(MemoryData { rss_bytes, .. }) = record.payload
+            {
+                app_metrics
+                    .entry(record.app_name.clone())
+                    .or_default()
+                    .mem_rss
+                    .push(rss_bytes);
+            }
         }
 
         // Compute averages and normalization factors
