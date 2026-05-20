@@ -119,10 +119,10 @@ fn discover_battery_node(power_supply_dir: &Path) -> Result<Option<String>> {
             let path = entry.path();
             let type_path = path.join("type");
 
-            if let Ok(type_str) = fs::read_to_string(&type_path) {
-                if type_str.trim() == "Battery" {
-                    return Ok(Some(path.to_string_lossy().to_string()));
-                }
+            if let Ok(type_str) = fs::read_to_string(&type_path)
+                && type_str.trim() == "Battery"
+            {
+                return Ok(Some(path.to_string_lossy().to_string()));
             }
         }
     }
@@ -155,7 +155,7 @@ fn read_battery_state(
     let capacity = read_sysfs_value::<f32>(&format!("{}/capacity", battery_path)).ok();
     let current_ua = read_sysfs_value::<i64>(&format!("{}/current_now", battery_path)).ok();
     let voltage_uv = read_sysfs_value::<u64>(&format!("{}/voltage_now", battery_path)).ok();
-    let status = fs::read_to_string(&format!("{}/status", battery_path))
+    let status = fs::read_to_string(format!("{}/status", battery_path))
         .ok()
         .map(|s| s.trim().to_string());
 
@@ -197,13 +197,7 @@ fn read_rapl_power(rapl_path: &str, prev_energy_uj: &mut Option<u64>) -> Result<
 
     let power_watts = if let Some(prev) = prev_energy_uj {
         // Compute delta energy in microjoules over 30 seconds
-        let delta_uj = if energy_uj >= *prev {
-            energy_uj - *prev
-        } else {
-            // Handle counter wraparound (rare, but possible)
-            // For now, assume a small wraparound or ignore
-            0
-        };
+        let delta_uj = energy_uj.saturating_sub(*prev);
 
         // Convert microjoules to watts: (µJ / 30s) / 1,000,000 = W
         (delta_uj as f64 / 1_000_000.0 / 30.0) as f32
