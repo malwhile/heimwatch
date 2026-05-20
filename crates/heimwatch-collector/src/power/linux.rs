@@ -235,7 +235,11 @@ mod tests {
     use tempfile::TempDir;
 
     /// Create a mock power supply directory structure.
-    fn setup_mock_power_supply(tmpdir: &TempDir, device: &str, dev_type: &str) -> std::path::PathBuf {
+    fn setup_mock_power_supply(
+        tmpdir: &TempDir,
+        device: &str,
+        dev_type: &str,
+    ) -> std::path::PathBuf {
         let device_path = tmpdir.path().join(device);
         fs::create_dir_all(&device_path).unwrap();
         let mut type_file = fs::File::create(device_path.join("type")).unwrap();
@@ -368,7 +372,11 @@ mod tests {
         write!(energy_file, "1000000").unwrap();
         drop(energy_file);
 
-        let watts1 = read_rapl_power(tmpdir.path().join("energy_uj").to_str().unwrap(), &mut prev_energy).unwrap();
+        let watts1 = read_rapl_power(
+            tmpdir.path().join("energy_uj").to_str().unwrap(),
+            &mut prev_energy,
+        )
+        .unwrap();
         assert_eq!(watts1, 0.0); // First read, no previous value
         assert_eq!(prev_energy, Some(1000000));
 
@@ -377,10 +385,19 @@ mod tests {
         write!(energy_file, "1200000").unwrap();
         drop(energy_file);
 
-        let watts2 = read_rapl_power(tmpdir.path().join("energy_uj").to_str().unwrap(), &mut prev_energy).unwrap();
+        let watts2 = read_rapl_power(
+            tmpdir.path().join("energy_uj").to_str().unwrap(),
+            &mut prev_energy,
+        )
+        .unwrap();
         // (1200000 - 1000000) / 1e6 / 30 = 0.2 / 30 ≈ 0.00667 W
         let expected = (200000.0 / 1_000_000.0 / 30.0) as f32;
-        assert!((watts2 - expected).abs() < 0.00001, "Expected {}, got {}", expected, watts2);
+        assert!(
+            (watts2 - expected).abs() < 0.00001,
+            "Expected {}, got {}",
+            expected,
+            watts2
+        );
     }
 
     /// Test RAPL power computation with no previous value returns 0.
@@ -392,7 +409,11 @@ mod tests {
         drop(energy_file);
 
         let mut prev_energy = None;
-        let watts = read_rapl_power(tmpdir.path().join("energy_uj").to_str().unwrap(), &mut prev_energy).unwrap();
+        let watts = read_rapl_power(
+            tmpdir.path().join("energy_uj").to_str().unwrap(),
+            &mut prev_energy,
+        )
+        .unwrap();
         assert_eq!(watts, 0.0);
     }
 
@@ -407,7 +428,11 @@ mod tests {
         write!(energy_file, "1000000").unwrap();
         drop(energy_file);
 
-        let watts = read_rapl_power(tmpdir.path().join("energy_uj").to_str().unwrap(), &mut prev_energy).unwrap();
+        let watts = read_rapl_power(
+            tmpdir.path().join("energy_uj").to_str().unwrap(),
+            &mut prev_energy,
+        )
+        .unwrap();
         // energy decreased (wraparound), saturating_sub returns 0
         assert_eq!(watts, 0.0);
     }
@@ -432,7 +457,8 @@ mod tests {
         write!(file, "  75  \n").unwrap();
         drop(file);
 
-        let value: f32 = read_sysfs_value(tmpdir.path().join("capacity").to_str().unwrap()).unwrap();
+        let value: f32 =
+            read_sysfs_value(tmpdir.path().join("capacity").to_str().unwrap()).unwrap();
         assert_eq!(value, 75.0);
     }
 
@@ -444,7 +470,8 @@ mod tests {
         write!(file, "invalid").unwrap();
         drop(file);
 
-        let result: std::result::Result<f32, _> = read_sysfs_value(tmpdir.path().join("capacity").to_str().unwrap());
+        let result: std::result::Result<f32, _> =
+            read_sysfs_value(tmpdir.path().join("capacity").to_str().unwrap());
         assert!(result.is_err());
     }
 
@@ -458,4 +485,3 @@ mod tests {
         assert_eq!(state.status, None);
     }
 }
-
