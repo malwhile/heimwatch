@@ -25,7 +25,6 @@ struct BatteryState {
     status: Option<String>,
 }
 
-
 pub struct PowerCollector {
     battery_path: Option<String>,
     ac_path: Option<String>,
