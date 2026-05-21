@@ -376,38 +376,41 @@ impl StorageLayer {
         let pwr_records = self.get_metrics_by_type(MetricType::Pwr, start, end)?;
 
         // Filter by battery state if requested
-        let on_battery_set: std::collections::HashSet<u64> = if let Some(true) = on_battery {
-            pwr_records
-                .iter()
-                .filter_map(|r| {
-                    if let MetricPayload::Pwr(PowerData {
-                        charging,
-                        battery_percent,
-                        ..
-                    }) = &r.payload
-                        && !charging
-                        && battery_percent.is_some()
-                    {
-                        return Some(r.timestamp);
-                    }
-                    None
-                })
-                .collect()
+        let on_battery_set: Option<std::collections::HashSet<u64>> = if let Some(true) = on_battery {
+            Some(
+                pwr_records
+                    .iter()
+                    .filter_map(|r| {
+                        if let MetricPayload::Pwr(PowerData {
+                            charging,
+                            battery_percent,
+                            ..
+                        }) = &r.payload
+                            && !charging
+                            && battery_percent.is_some()
+                        {
+                            return Some(r.timestamp);
+                        }
+                        None
+                    })
+                    .collect(),
+            )
         } else if let Some(false) = on_battery {
-            pwr_records
-                .iter()
-                .filter_map(|r| {
-                    if let MetricPayload::Pwr(PowerData { charging, .. }) = &r.payload
-                        && *charging
-                    {
-                        return Some(r.timestamp);
-                    }
-                    None
-                })
-                .collect()
+            Some(
+                pwr_records
+                    .iter()
+                    .filter_map(|r| {
+                        if let MetricPayload::Pwr(PowerData { charging, .. }) = &r.payload
+                            && *charging
+                        {
+                            return Some(r.timestamp);
+                        }
+                        None
+                    })
+                    .collect(),
+            )
         } else {
-            // No filter - all timestamps are valid
-            (0..=u64::MAX).collect()
+            None
         };
 
         // Aggregate metrics per app
@@ -423,9 +426,17 @@ impl StorageLayer {
 
         let mut app_metrics: HashMap<String, AppMetrics> = HashMap::new();
 
+        // Helper to check if a timestamp passes the battery filter
+        let passes_filter = |ts: u64| {
+            on_battery_set
+                .as_ref()
+                .map(|set| set.contains(&ts))
+                .unwrap_or(true)
+        };
+
         // Process CPU
         for record in &cpu_records {
-            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+            if passes_filter(record.timestamp)
                 && let MetricPayload::Cpu(CpuData {
                     cpu_usage_percent, ..
                 }) = record.payload
@@ -440,7 +451,7 @@ impl StorageLayer {
 
         // Process GPU
         for record in &gpu_records {
-            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+            if passes_filter(record.timestamp)
                 && let MetricPayload::GpuProc(GpuProcessData {
                     usage_percent: Some(pct),
                     ..
@@ -456,7 +467,7 @@ impl StorageLayer {
 
         // Process Focus
         for record in &foc_records {
-            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+            if passes_filter(record.timestamp)
                 && let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload
             {
                 app_metrics
@@ -468,7 +479,7 @@ impl StorageLayer {
 
         // Process Disk
         for record in &dsk_records {
-            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+            if passes_filter(record.timestamp)
                 && let MetricPayload::Dsk(DiskData {
                     read_bytes,
                     write_bytes,
@@ -484,7 +495,7 @@ impl StorageLayer {
 
         // Process Network
         for record in &net_records {
-            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+            if passes_filter(record.timestamp)
                 && let MetricPayload::Net(NetworkData {
                     tx_bytes, rx_bytes, ..
                 }) = record.payload
@@ -498,7 +509,7 @@ impl StorageLayer {
 
         // Process Memory
         for record in &mem_records {
-            if (on_battery.is_none() || on_battery_set.contains(&record.timestamp))
+            if passes_filter(record.timestamp)
                 && let MetricPayload::Mem(MemoryData { rss_bytes, .. }) = record.payload
             {
                 app_metrics
@@ -631,6 +642,28 @@ impl StorageLayer {
         });
 
         Ok(power_stats)
+    }
+
+    /// Get the top N apps by power percentage over a time range.
+    ///
+    /// Delegates to `get_power_stats` and returns only the top `limit` apps.
+    pub fn get_top_apps_by_power(
+        &self,
+        start: u64,
+        end: u64,
+        on_battery: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<AppPowerStats>> {
+        let mut stats = self.get_power_stats(start, end, on_battery)?;
+        stats.truncate(limit);
+        Ok(stats)
+    }
+
+    /// Get all power state records (system-level metrics) in a time range.
+    ///
+    /// Returns all `MetricType::Pwr` records for plotting battery level and RAPL power over time.
+    pub fn get_system_power_history(&self, start: u64, end: u64) -> Result<Vec<MetricRecord>> {
+        self.get_metrics_by_type(MetricType::Pwr, start, end)
     }
 }
 
@@ -861,5 +894,334 @@ mod tests {
         } else {
             panic!("Expected Pwr payload");
         }
+    }
+
+    /// Test get_top_apps_by_power returns correct limit.
+    #[test]
+    fn test_get_top_apps_by_power_limit() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert CPU records for 5 apps at timestamps 1000-1004
+        for i in 0..5 {
+            db.insert_metric(&MetricRecord {
+                app_name: format!("app{}", i),
+                timestamp: 1000 + i as u64,
+                payload: MetricPayload::Cpu(CpuData {
+                    cpu_time_ns: 1_000_000_000,
+                    cpu_usage_percent: (100.0 - (i as f32 * 10.0)),
+                }),
+            })
+            .unwrap();
+        }
+
+        // Query top 2 apps
+        let stats = db
+            .get_top_apps_by_power(1000, 1004, None, 2)
+            .unwrap();
+        assert_eq!(stats.len(), 2);
+
+        // Verify top apps have highest power_pct
+        assert!(stats[0].power_pct >= stats[1].power_pct);
+    }
+
+    /// Test get_top_apps_by_power respects battery filter.
+    #[test]
+    fn test_get_top_apps_by_power_battery_filter() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert power records: on battery at 1000, plugged in at 2000
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 10.0,
+                battery_percent: Some(80.0),
+                charging: false,
+                rapl_package_watts: None,
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 2000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 10.0,
+                battery_percent: Some(70.0),
+                charging: true,
+                rapl_package_watts: None,
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        // Insert CPU at 1000 (on battery) and 2000 (plugged in)
+        db.insert_metric(&MetricRecord {
+            app_name: "firefox".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "firefox".to_string(),
+            timestamp: 2000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        // Query on_battery=true should only include timestamp 1000
+        let stats_battery = db
+            .get_top_apps_by_power(1000, 2000, Some(true), 10)
+            .unwrap();
+
+        // Query on_battery=false should only include timestamp 2000
+        let stats_plugged = db
+            .get_top_apps_by_power(1000, 2000, Some(false), 10)
+            .unwrap();
+
+        assert_eq!(stats_battery.len(), 1);
+        assert!(stats_battery[0].on_battery);
+
+        assert_eq!(stats_plugged.len(), 1);
+        assert!(!stats_plugged[0].on_battery);
+    }
+
+    /// Test get_system_power_history returns all power records.
+    #[test]
+    fn test_get_system_power_history() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert 3 power records
+        let records: Vec<MetricRecord> = vec![
+            MetricRecord {
+                app_name: "system".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Pwr(PowerData {
+                    watt_usage: 10.0,
+                    battery_percent: Some(80.0),
+                    charging: false,
+                    rapl_package_watts: None,
+                    rapl_core_watts: None,
+                    battery_current_ua: None,
+                    battery_voltage_uv: None,
+                }),
+            },
+            MetricRecord {
+                app_name: "system".to_string(),
+                timestamp: 2000,
+                payload: MetricPayload::Pwr(PowerData {
+                    watt_usage: 15.0,
+                    battery_percent: Some(70.0),
+                    charging: true,
+                    rapl_package_watts: None,
+                    rapl_core_watts: None,
+                    battery_current_ua: None,
+                    battery_voltage_uv: None,
+                }),
+            },
+            MetricRecord {
+                app_name: "system".to_string(),
+                timestamp: 3000,
+                payload: MetricPayload::Pwr(PowerData {
+                    watt_usage: 20.0,
+                    battery_percent: Some(60.0),
+                    charging: false,
+                    rapl_package_watts: None,
+                    rapl_core_watts: None,
+                    battery_current_ua: None,
+                    battery_voltage_uv: None,
+                }),
+            },
+        ];
+
+        for record in &records {
+            db.insert_metric(record).unwrap();
+        }
+
+        // Query entire range
+        let history = db.get_system_power_history(1000, 3000).unwrap();
+        assert_eq!(history.len(), 3);
+
+        // Verify timestamps match
+        assert_eq!(history[0].timestamp, 1000);
+        assert_eq!(history[1].timestamp, 2000);
+        assert_eq!(history[2].timestamp, 3000);
+
+        // Query partial range
+        let partial = db.get_system_power_history(1500, 2500).unwrap();
+        assert_eq!(partial.len(), 1);
+        assert_eq!(partial[0].timestamp, 2000);
+    }
+
+    /// Test get_power_stats computes correct normalized scores.
+    #[test]
+    fn test_get_power_stats_normalization() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert CPU data: app1 50%, app2 50%
+        db.insert_metric(&MetricRecord {
+            app_name: "app1".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "app2".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        let stats = db.get_power_stats(1000, 1001, None).unwrap();
+
+        // With equal CPU usage, both should get ~50% power
+        assert_eq!(stats.len(), 2);
+
+        // Total power_pct should sum to ~100
+        let total_pct: f32 = stats.iter().map(|s| s.power_pct).sum();
+        assert!((total_pct - 100.0).abs() < 0.1);
+
+        // With only CPU usage (50%, 50%), CPU weight is 0.40
+        // app1 score = 0.40 * 50 = 20
+        // app2 score = 0.40 * 50 = 20
+        // total = 40, so each gets 20/40 * 100 = 50%
+        assert!((stats[0].power_pct - 50.0).abs() < 1.0);
+        assert!((stats[1].power_pct - 50.0).abs() < 1.0);
+    }
+
+    /// Test get_power_stats correctly computes contribution fractions.
+    #[test]
+    fn test_get_power_stats_contributions() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert CPU and GPU data for one app
+        db.insert_metric(&MetricRecord {
+            app_name: "game".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 40.0,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "game".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::GpuProc(GpuProcessData {
+                gpu_index: 0,
+                usage_percent: Some(60.0),
+                vram_used_bytes: None,
+            }),
+        })
+        .unwrap();
+
+        let stats = db.get_power_stats(1000, 1001, None).unwrap();
+        assert_eq!(stats.len(), 1);
+
+        let game = &stats[0];
+        assert_eq!(game.app_name, "game");
+
+        // CPU score = 0.40 * 40 = 16
+        // GPU score = 0.20 * 60 = 12
+        // total = 28, so contributions are: cpu = 16/28, gpu = 12/28
+        assert!((game.cpu_contribution - (16.0 / 28.0)).abs() < 0.01);
+        assert!((game.gpu_contribution - (12.0 / 28.0)).abs() < 0.01);
+        assert!(game.display_contribution < 0.01);
+        assert!(game.disk_contribution < 0.01);
+        assert!(game.net_contribution < 0.01);
+        assert!(game.mem_contribution < 0.01);
+    }
+
+    /// Test get_power_stats with no data returns empty list.
+    #[test]
+    fn test_get_power_stats_empty_range() {
+        let (_tmpdir, db) = temp_db();
+
+        let stats = db.get_power_stats(1000, 2000, None).unwrap();
+        assert_eq!(stats.len(), 0);
+    }
+
+    /// Test get_power_stats with zero window returns empty.
+    #[test]
+    fn test_get_power_stats_zero_window() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert a record at 1000
+        db.insert_metric(&MetricRecord {
+            app_name: "app".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        // Query with zero window (start == end)
+        let stats = db.get_power_stats(1000, 1000, None).unwrap();
+        assert_eq!(stats.len(), 0);
+    }
+
+    /// Test that display contribution is computed from focus time.
+    #[test]
+    fn test_get_power_stats_display_contribution() {
+        let (_tmpdir, db) = temp_db();
+
+        let window_duration = 3600; // 1 hour in seconds
+
+        // Insert focus time: app1 has full focus (3600s), app2 has none
+        db.insert_metric(&MetricRecord {
+            app_name: "app1".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Foc(FocusData {
+                app_id: "app1".to_string(),
+                duration_ms: window_duration * 1000,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "app2".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        let stats = db
+            .get_power_stats(1000, 1000 + window_duration, None)
+            .unwrap();
+
+        // Find app1 in results
+        let app1 = stats.iter().find(|s| s.app_name == "app1").unwrap();
+
+        // app1 has full focus, so display_fraction = 100
+        // display score = 0.15 * 100 = 15
+        // Since app1 only has display, power_score ≈ 15
+        // app2 has cpu score = 0.40 * 50 = 20
+        // total score ≈ 35, so app1 should get ~15/35 ≈ 43%
+        assert!(app1.display_contribution > 0.5);
     }
 }
