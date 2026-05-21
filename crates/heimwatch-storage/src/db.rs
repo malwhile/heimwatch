@@ -376,7 +376,8 @@ impl StorageLayer {
         let pwr_records = self.get_metrics_by_type(MetricType::Pwr, start, end)?;
 
         // Filter by battery state if requested
-        let on_battery_set: Option<std::collections::HashSet<u64>> = if let Some(true) = on_battery {
+        let on_battery_set: Option<std::collections::HashSet<u64>> = if let Some(true) = on_battery
+        {
             Some(
                 pwr_records
                     .iter()
@@ -915,9 +916,7 @@ mod tests {
         }
 
         // Query top 2 apps
-        let stats = db
-            .get_top_apps_by_power(1000, 1004, None, 2)
-            .unwrap();
+        let stats = db.get_top_apps_by_power(1000, 1004, None, 2).unwrap();
         assert_eq!(stats.len(), 2);
 
         // Verify top apps have highest power_pct
