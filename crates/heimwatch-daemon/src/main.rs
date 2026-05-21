@@ -158,7 +158,12 @@ async fn main() -> anyhow::Result<()> {
             SnapshotCommand::Focus { window, format, db } => {
                 snapshot::run_snapshot(window, &format, "focus", Some(&db)).await?;
             }
-            SnapshotCommand::Power { window, format, db, limit } => {
+            SnapshotCommand::Power {
+                window,
+                format,
+                db,
+                limit,
+            } => {
                 snapshot::run_power_snapshot(window, &format, &db, limit).await?;
             }
         },

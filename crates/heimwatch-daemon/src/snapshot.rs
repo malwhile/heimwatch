@@ -2,7 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use heimwatch_core::{MetricPayload, MetricRecord, PowerData, current_unix_timestamp};
-use heimwatch_storage::{StorageLayer, AppPowerStats};
+use heimwatch_storage::{AppPowerStats, StorageLayer};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -212,7 +212,8 @@ fn print_power_table(
     print_power_section("On Battery", on_battery);
 
     if let Some(latest) = system_power.last()
-        && let MetricPayload::Pwr(pwr) = &latest.payload {
+        && let MetricPayload::Pwr(pwr) = &latest.payload
+    {
         print_system_power_summary(pwr);
     }
 }
