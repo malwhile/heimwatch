@@ -15,6 +15,10 @@ pub async fn run_snapshot(
     metric_type: &str,
     db_path: Option<&str>,
 ) -> Result<()> {
+    if window_secs == 0 {
+        anyhow::bail!("Window must be greater than 0 seconds");
+    }
+
     match metric_type {
         "cpu" => run_cpu_snapshot(window_secs, format).await,
         "disk" => run_disk_snapshot(window_secs, format).await,
@@ -28,10 +32,6 @@ pub async fn run_snapshot(
 
 /// Capture network traffic snapshot (one-shot probe collection).
 async fn run_network_snapshot(window_secs: u64, format: &str) -> Result<()> {
-    if window_secs == 0 {
-        anyhow::bail!("Window must be greater than 0 seconds");
-    }
-
     log::info!("Attaching eBPF probes, observing for {}s...", window_secs);
     let mut network_collector =
         tokio::task::spawn_blocking(heimwatch_collector::NetworkCollector::new)
@@ -48,10 +48,6 @@ async fn run_network_snapshot(window_secs: u64, format: &str) -> Result<()> {
 
 /// Capture CPU usage snapshot (one-shot probe collection).
 async fn run_cpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
-    if window_secs == 0 {
-        anyhow::bail!("Window must be greater than 0 seconds");
-    }
-
     log::info!(
         "Attaching eBPF sched_switch probe, observing for {}s...",
         window_secs
@@ -72,14 +68,6 @@ async fn run_cpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
 
 /// Capture disk I/O snapshot (one-shot probe collection).
 async fn run_disk_snapshot(window_secs: u64, format: &str) -> Result<()> {
-    if window_secs == 0 {
-        anyhow::bail!("Window must be greater than 0 seconds");
-    }
-
-    log::info!(
-        "Attaching eBPF block_rq_issue probe, observing for {}s...",
-        window_secs
-    );
     let mut disk_collector = tokio::task::spawn_blocking(heimwatch_collector::DiskCollector::new)
         .await?
         .map_err(|e| anyhow!("Disk I/O tracking unavailable on this platform: {}", e))?;
@@ -96,10 +84,6 @@ async fn run_disk_snapshot(window_secs: u64, format: &str) -> Result<()> {
 
 /// Capture memory usage snapshot (polling collection).
 async fn run_memory_snapshot(window_secs: u64, format: &str) -> Result<()> {
-    if window_secs == 0 {
-        anyhow::bail!("Window must be greater than 0 seconds");
-    }
-
     log::info!(
         "Polling /proc for memory usage, observing for {}s...",
         window_secs
@@ -117,10 +101,6 @@ async fn run_memory_snapshot(window_secs: u64, format: &str) -> Result<()> {
 
 /// Capture GPU metrics snapshot (polling collection).
 async fn run_gpu_snapshot(window_secs: u64, format: &str) -> Result<()> {
-    if window_secs == 0 {
-        anyhow::bail!("Window must be greater than 0 seconds");
-    }
-
     log::info!("Polling GPU metrics, observing for {}s...", window_secs);
     let mut gpu_collector = tokio::task::spawn_blocking(heimwatch_collector::GpuCollector::new)
         .await?
@@ -163,6 +143,7 @@ pub async fn run_power_snapshot(
     limit: usize,
 ) -> Result<()> {
     log::info!("Querying power usage from last {}s...", window_secs);
+
     let storage =
         StorageLayer::open(db_path).map_err(|e| anyhow!("Failed to open database: {}", e))?;
 
