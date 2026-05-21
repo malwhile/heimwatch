@@ -6,6 +6,26 @@ use heimwatch_storage::{AppPowerStats, StorageLayer};
 use std::collections::HashMap;
 use std::time::Duration;
 
+// Separator widths for table formatting
+const SEPARATOR_WIDTH_NETWORK: usize = 52;
+const SEPARATOR_WIDTH_CPU: usize = 70;
+const SEPARATOR_WIDTH_DISK: usize = 64;
+const SEPARATOR_WIDTH_MEMORY: usize = 80;
+const SEPARATOR_WIDTH_FOCUS: usize = 52;
+const SEPARATOR_WIDTH_GPU: usize = 100;
+const SEPARATOR_WIDTH_GPU_PROC: usize = 68;
+
+/// Truncate app name for display, preserving UTF-8 safety.
+fn format_app_name(name: &str, max_len: usize) -> &str {
+    &name[..name.len().min(max_len)]
+}
+
+/// Format an optional percentage value with "N/A" fallback and right-alignment.
+fn format_optional_percentage(val: Option<f32>) -> String {
+    val.map(|v| format!("{:>6.1}%", v))
+        .unwrap_or_else(|| "   N/A".to_string())
+}
+
 /// Capture a snapshot of metrics (network, CPU, disk, memory, GPU, or focus) and print results.
 ///
 /// Dispatches to platform-specific collectors or database queries based on metric_type.
@@ -209,12 +229,10 @@ fn print_power_section(label: &str, stats: &[AppPowerStats]) {
     }
 
     for (i, stat) in stats.iter().enumerate() {
-        let name = &stat.app_name;
-        let name_truncated = &name[..name.len().min(20)];
         println!(
             "  {:>2}. {:<20} {:>5.1}%  (CPU: {:>2.0}%, GPU: {:>2.0}%, Disp: {:>2.0}%, Disk: {:>2.0}%, Net: {:>2.0}%, Mem: {:>2.0}%)",
             i + 1,
-            name_truncated,
+            format_app_name(&stat.app_name, 20),
             stat.power_pct,
             stat.cpu_contribution * 100.0,
             stat.gpu_contribution * 100.0,
@@ -308,16 +326,16 @@ fn print_snapshot_table(records: &[MetricRecord], window_secs: u64) {
 /// Print a human-readable table of network traffic by application.
 fn print_network_table(records: &[MetricRecord], window_secs: u64) {
     println!("\nHeiwatch Network Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(52));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_NETWORK));
     println!("  {:<28} {:>10} {:>10}", "App", "TX", "RX");
-    println!("  {}", "─".repeat(48));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_NETWORK - 4));
 
     let (mut total_tx, mut total_rx) = (0u64, 0u64);
     for r in records {
         if let MetricPayload::Net(net) = &r.payload {
             println!(
                 "  {:<28} {:>10} {:>10}",
-                &r.app_name[..r.app_name.len().min(28)],
+                format_app_name(&r.app_name, 28),
                 fmt_bytes(net.tx_bytes),
                 fmt_bytes(net.rx_bytes)
             );
@@ -325,7 +343,7 @@ fn print_network_table(records: &[MetricRecord], window_secs: u64) {
             total_rx += net.rx_bytes;
         }
     }
-    println!("{}", "─".repeat(52));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_NETWORK));
     println!(
         "  {:<28} {:>10} {:>10}",
         "Total",
@@ -338,9 +356,9 @@ fn print_network_table(records: &[MetricRecord], window_secs: u64) {
 /// Print a human-readable table of CPU usage by application.
 fn print_cpu_table(records: &[MetricRecord], window_secs: u64) {
     println!("\nHeiwatch CPU Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(70));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_CPU));
     println!("  {:<28} {:>18} {:>18}", "App", "CPU Time", "Usage %");
-    println!("  {}", "─".repeat(66));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_CPU - 4));
 
     // Sort by CPU time descending
     let mut sorted: Vec<_> = records.iter().collect();
@@ -364,7 +382,7 @@ fn print_cpu_table(records: &[MetricRecord], window_secs: u64) {
         if let MetricPayload::Cpu(cpu) = &r.payload {
             println!(
                 "  {:<28} {:>18} {:>17.1}%",
-                &r.app_name[..r.app_name.len().min(28)],
+                format_app_name(&r.app_name, 28),
                 fmt_cpu_time_ns(cpu.cpu_time_ns),
                 cpu.cpu_usage_percent
             );
@@ -372,7 +390,7 @@ fn print_cpu_table(records: &[MetricRecord], window_secs: u64) {
             total_usage_percent += cpu.cpu_usage_percent;
         }
     }
-    println!("{}", "─".repeat(70));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_CPU));
     println!(
         "  {:<28} {:>18} {:>17.1}%",
         "Total",
@@ -385,9 +403,9 @@ fn print_cpu_table(records: &[MetricRecord], window_secs: u64) {
 /// Print a human-readable table of disk I/O by application.
 fn print_disk_table(records: &[MetricRecord], window_secs: u64) {
     println!("\nHeiwatch Disk I/O Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(64));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_DISK));
     println!("  {:<28} {:>10} {:>10}", "App", "Read", "Write");
-    println!("  {}", "─".repeat(60));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_DISK - 4));
 
     // Sort by total I/O descending
     let mut sorted: Vec<_> = records.iter().collect();
@@ -410,7 +428,7 @@ fn print_disk_table(records: &[MetricRecord], window_secs: u64) {
         if let MetricPayload::Dsk(dsk) = &r.payload {
             println!(
                 "  {:<28} {:>10} {:>10}",
-                &r.app_name[..r.app_name.len().min(28)],
+                format_app_name(&r.app_name, 28),
                 fmt_bytes(dsk.read_bytes),
                 fmt_bytes(dsk.write_bytes)
             );
@@ -418,7 +436,7 @@ fn print_disk_table(records: &[MetricRecord], window_secs: u64) {
             total_write += dsk.write_bytes;
         }
     }
-    println!("{}", "─".repeat(64));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_DISK));
     println!(
         "  {:<28} {:>10} {:>10}",
         "Total",
@@ -431,12 +449,12 @@ fn print_disk_table(records: &[MetricRecord], window_secs: u64) {
 /// Print a human-readable table of memory usage by application.
 fn print_memory_table(records: &[MetricRecord], window_secs: u64) {
     println!("\nHeiwatch Memory Usage Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(80));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_MEMORY));
     println!(
         "  {:<28} {:>10} {:>10} {:>10} {:>10}",
         "App", "RSS", "VMS", "Swap", "Procs"
     );
-    println!("  {}", "─".repeat(76));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_MEMORY - 4));
 
     // Sort by RSS descending
     let mut sorted: Vec<_> = records.iter().collect();
@@ -459,7 +477,7 @@ fn print_memory_table(records: &[MetricRecord], window_secs: u64) {
         if let MetricPayload::Mem(mem) = &r.payload {
             println!(
                 "  {:<28} {:>10} {:>10} {:>10} {:>10}",
-                &r.app_name[..r.app_name.len().min(28)],
+                format_app_name(&r.app_name, 28),
                 fmt_bytes(mem.rss_bytes),
                 fmt_bytes(mem.vms_bytes),
                 fmt_bytes(mem.swap_bytes),
@@ -470,7 +488,7 @@ fn print_memory_table(records: &[MetricRecord], window_secs: u64) {
             total_swap += mem.swap_bytes;
         }
     }
-    println!("{}", "─".repeat(80));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_MEMORY));
     println!(
         "  {:<28} {:>10} {:>10} {:>10}",
         "Total",
@@ -484,9 +502,9 @@ fn print_memory_table(records: &[MetricRecord], window_secs: u64) {
 /// Print a human-readable table of focus time by application.
 fn print_focus_table(records: &[MetricRecord], window_secs: u64) {
     println!("\nHeiwatch Focus Time Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(52));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_FOCUS));
     println!("  {:<28} {:>20}", "App", "Focus Time");
-    println!("  {}", "─".repeat(48));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_FOCUS - 4));
 
     // Aggregate focus time by app
     let mut app_totals: HashMap<String, u64> = HashMap::new();
@@ -504,12 +522,12 @@ fn print_focus_table(records: &[MetricRecord], window_secs: u64) {
     for (app, duration_ms) in sorted {
         println!(
             "  {:<28} {:>20}",
-            &app[..app.len().min(28)],
+            format_app_name(&app, 28),
             fmt_duration_ms(duration_ms)
         );
         total_ms += duration_ms;
     }
-    println!("{}", "─".repeat(52));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_FOCUS));
     println!("  {:<28} {:>20}", "Total", fmt_duration_ms(total_ms));
     println!();
 }
@@ -517,12 +535,12 @@ fn print_focus_table(records: &[MetricRecord], window_secs: u64) {
 /// Print a human-readable table of GPU metrics.
 fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
     println!("\nHeiwatch GPU Snapshot ({}s window)", window_secs);
-    println!("{}", "─".repeat(100));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_GPU));
     println!(
         "  {:<28} {:<8} {:<12} {:<10} {:<10} {:<14}",
         "GPU", "Vendor", "Usage", "VRAM", "Temp", "Clock"
     );
-    println!("  {}", "─".repeat(96));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_GPU - 4));
 
     for r in records {
         if let MetricPayload::Gpu(gpu) = &r.payload {
@@ -533,10 +551,7 @@ fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
                 heimwatch_core::GpuVendor::Unknown => "Unknown",
             };
 
-            let usage_str = gpu
-                .usage_percent
-                .map(|u| format!("{:>6.1}%", u))
-                .unwrap_or_else(|| "   N/A".to_string());
+            let usage_str = format_optional_percentage(gpu.usage_percent);
 
             let vram_str = match (gpu.vram_used_bytes, gpu.vram_total_bytes) {
                 (Some(used), Some(total)) => {
@@ -557,7 +572,7 @@ fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
 
             println!(
                 "  {:<28} {:<8} {:>12} {:<10} {:<10} {:<14}",
-                &gpu.name[..gpu.name.len().min(28)],
+                format_app_name(&gpu.name, 28),
                 vendor_str,
                 usage_str,
                 vram_str,
@@ -566,7 +581,7 @@ fn print_gpu_table(records: &[MetricRecord], window_secs: u64) {
             );
         }
     }
-    println!("{}", "─".repeat(100));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_GPU));
     println!();
 }
 
@@ -576,12 +591,12 @@ fn print_gpu_proc_table(records: &[MetricRecord], window_secs: u64) {
         "\nHeiwatch GPU Per-Process Snapshot ({}s window)",
         window_secs
     );
-    println!("{}", "─".repeat(68));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_GPU_PROC));
     println!(
         "  {:<28} {:<6} {:>12} {:>12}",
         "App", "GPU", "Usage", "VRAM"
     );
-    println!("  {}", "─".repeat(64));
+    println!("  {}", "─".repeat(SEPARATOR_WIDTH_GPU_PROC - 4));
 
     // Sort by usage descending
     let mut sorted: Vec<_> = records.iter().collect();
@@ -615,14 +630,14 @@ fn print_gpu_proc_table(records: &[MetricRecord], window_secs: u64) {
 
             println!(
                 "  {:<28} {:<6} {:<12} {:>12}",
-                &r.app_name[..r.app_name.len().min(28)],
+                format_app_name(&r.app_name, 28),
                 proc.gpu_index,
                 usage_str,
                 vram_str
             );
         }
     }
-    println!("{}", "─".repeat(68));
+    println!("{}", "─".repeat(SEPARATOR_WIDTH_GPU_PROC));
     println!();
 }
 
