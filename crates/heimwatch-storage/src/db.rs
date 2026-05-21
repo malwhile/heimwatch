@@ -513,7 +513,10 @@ impl StorageLayer {
             }
         }
 
-        // Delegate to pure calculation logic (can be swapped in Phase 4 for Approach B / RAPL)
+        // Delegate to pure calculation logic.
+        // Phase 4: To add Approach B (RAPL-calibrated), create `compute_power_stats_rapl()` or add
+        // a `strategy: PowerAttributionStrategy` parameter to support swapping algorithms without
+        // touching the storage layer.
         let mut stats = power_calc::compute_power_stats(app_metrics, window_ms);
 
         // Set on_battery field based on query filter (true if filtered to on-battery, false otherwise)

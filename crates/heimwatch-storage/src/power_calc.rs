@@ -29,22 +29,25 @@ struct ScoreComponents {
     mem: f32,
 }
 
-/// Compute per-app power consumption statistics using fixed-weight approach.
+/// Compute per-app power consumption statistics using fixed-weight approach (Approach A).
+///
+/// This is a pure calculation function that operates on pre-aggregated metrics.
+/// Battery state filtering is handled by the caller (`StorageLayer::get_power_stats`).
 ///
 /// # Arguments
 /// * `app_metrics` - Pre-aggregated metrics per app (CPU %, GPU %, focus time, disk/net/memory bytes)
 /// * `window_ms` - Query window duration in milliseconds (used to normalize focus time)
-/// * `on_battery_filter` - Optional battery state filter. If Some, only included timestamps are counted.
 ///
-/// # Approach A (Fixed Weights)
-/// - CPU: 40% (or RAPL-calibrated in Approach B / Phase 4)
+/// # Weights (Approach A: Fixed-Weight Attribution)
+/// - CPU: 40% (RAPL-calibrated alternative in Phase 4)
 /// - GPU: 20%
 /// - Display (focus time): 15%
 /// - Disk I/O: 10%
 /// - Network: 10%
 /// - Memory: 5%
 ///
-/// Returns apps sorted descending by `power_pct`.
+/// # Returns
+/// Apps sorted descending by `power_pct`. Contribution fractions sum to ≤1.0 per app.
 pub fn compute_power_stats(
     app_metrics: HashMap<String, AppMetrics>,
     window_ms: u64,
