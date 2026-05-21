@@ -513,11 +513,10 @@ impl StorageLayer {
             }
         }
 
-        // Delegate to pure calculation logic.
-        // Phase 4: To add Approach B (RAPL-calibrated), create `compute_power_stats_rapl()` or add
-        // a `strategy: PowerAttributionStrategy` parameter to support swapping algorithms without
-        // touching the storage layer.
-        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms);
+        // Extract RAPL data and delegate to pure calculation logic
+        // (automatically uses Approach B if RAPL available, falls back to Approach A otherwise)
+        let rapl_package_watts = Self::extract_rapl_average(&pwr_records);
+        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms, rapl_package_watts);
 
         // Set on_battery field based on query filter (true if filtered to on-battery, false otherwise)
         for stat in &mut stats {
@@ -547,6 +546,33 @@ impl StorageLayer {
     /// Returns all `MetricType::Pwr` records for plotting battery level and RAPL power over time.
     pub fn get_system_power_history(&self, start: u64, end: u64) -> Result<Vec<MetricRecord>> {
         self.get_metrics_by_type(MetricType::Pwr, start, end)
+    }
+
+    /// Extract the average RAPL package watts from power records in a window.
+    ///
+    /// Returns Some(avg_watts) if RAPL data is available; None if no RAPL readings exist.
+    /// Used to determine whether to use Approach A (fixed weights) or Approach B (RAPL-calibrated).
+    fn extract_rapl_average(pwr_records: &[MetricRecord]) -> Option<f32> {
+        let values: Vec<f32> = pwr_records
+            .iter()
+            .filter_map(|r| {
+                if let MetricPayload::Pwr(PowerData {
+                    rapl_package_watts: Some(w),
+                    ..
+                }) = &r.payload
+                {
+                    Some(*w)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().sum::<f32>() / values.len() as f32)
+        }
     }
 }
 
@@ -1132,5 +1158,134 @@ mod tests {
         // app2 has cpu score = 0.40 * 50 = 20
         // total score ≈ 35, so app1 should get ~15/35 ≈ 43%
         assert!(app1.display_contribution > 0.5);
+    }
+
+    /// Test that Approach B (RAPL) changes power scores when RAPL data is present.
+    #[test]
+    fn test_get_power_stats_rapl_approach_b() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert power records with RAPL: 20W CPU package power
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 20.0,
+                battery_percent: Some(80.0),
+                charging: false,
+                rapl_package_watts: Some(20.0),
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        // Insert CPU records: two apps, 50% each
+        db.insert_metric(&MetricRecord {
+            app_name: "app_a".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "app_b".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 50.0,
+            }),
+        })
+        .unwrap();
+
+        // Query with RAPL available (window includes the pwr record)
+        let stats = db.get_power_stats(1000, 1001, None).unwrap();
+        assert_eq!(stats.len(), 2);
+
+        let app_a = stats.iter().find(|s| s.app_name == "app_a").unwrap();
+        let app_b = stats.iter().find(|s| s.app_name == "app_b").unwrap();
+
+        // With RAPL (Approach B): CPU score = 20W * (50% / 100%) = 10W each
+        // So power_pct should be ~50% each (equal due to equal CPU %)
+        const EPSILON: f32 = 1.0;
+        assert!(
+            (app_a.power_pct - 50.0).abs() < EPSILON,
+            "app_a should be ~50% with RAPL, got {}",
+            app_a.power_pct
+        );
+        assert!(
+            (app_b.power_pct - 50.0).abs() < EPSILON,
+            "app_b should be ~50% with RAPL, got {}",
+            app_b.power_pct
+        );
+    }
+
+    /// Test that Approach A fallback works when RAPL is not available.
+    #[test]
+    fn test_get_power_stats_without_rapl_uses_approach_a() {
+        let (_tmpdir, db) = temp_db();
+
+        // Insert power records WITHOUT RAPL (rapl_package_watts = None)
+        db.insert_metric(&MetricRecord {
+            app_name: "system".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Pwr(PowerData {
+                watt_usage: 0.0,
+                battery_percent: Some(80.0),
+                charging: false,
+                rapl_package_watts: None,
+                rapl_core_watts: None,
+                battery_current_ua: None,
+                battery_voltage_uv: None,
+            }),
+        })
+        .unwrap();
+
+        // Insert CPU records: two apps, 60% and 40%
+        db.insert_metric(&MetricRecord {
+            app_name: "heavy".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 60.0,
+            }),
+        })
+        .unwrap();
+
+        db.insert_metric(&MetricRecord {
+            app_name: "light".to_string(),
+            timestamp: 1000,
+            payload: MetricPayload::Cpu(CpuData {
+                cpu_time_ns: 1_000_000_000,
+                cpu_usage_percent: 40.0,
+            }),
+        })
+        .unwrap();
+
+        let stats = db.get_power_stats(1000, 1001, None).unwrap();
+        assert_eq!(stats.len(), 2);
+
+        let heavy = stats.iter().find(|s| s.app_name == "heavy").unwrap();
+        let light = stats.iter().find(|s| s.app_name == "light").unwrap();
+
+        // With Approach A (no RAPL): cpu_score = 0.40 * cpu_pct_avg
+        // heavy: 0.40 * 60 = 24
+        // light: 0.40 * 40 = 16
+        // total: 40, so heavy gets 24/40 = 60%, light gets 16/40 = 40%
+        const EPSILON: f32 = 1.0;
+        assert!(
+            (heavy.power_pct - 60.0).abs() < EPSILON,
+            "heavy should be ~60% with Approach A, got {}",
+            heavy.power_pct
+        );
+        assert!(
+            (light.power_pct - 40.0).abs() < EPSILON,
+            "light should be ~40% with Approach A, got {}",
+            light.power_pct
+        );
     }
 }

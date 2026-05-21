@@ -8,7 +8,7 @@ use heimwatch_core::AppPowerStats;
 use std::collections::HashMap;
 
 /// Aggregated metrics for a single app across a time range.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AppMetrics {
     pub cpu_pcts: Vec<f32>,
     pub gpu_pcts: Vec<f32>,
@@ -29,7 +29,7 @@ struct ScoreComponents {
     mem: f32,
 }
 
-/// Compute per-app power consumption statistics using fixed-weight approach (Approach A).
+/// Compute per-app power consumption statistics using Approach A (fixed weights) or Approach B (RAPL-calibrated).
 ///
 /// This is a pure calculation function that operates on pre-aggregated metrics.
 /// Battery state filtering is handled by the caller (`StorageLayer::get_power_stats`).
@@ -37,26 +37,32 @@ struct ScoreComponents {
 /// # Arguments
 /// * `app_metrics` - Pre-aggregated metrics per app (CPU %, GPU %, focus time, disk/net/memory bytes)
 /// * `window_ms` - Query window duration in milliseconds (used to normalize focus time)
+/// * `rapl_package_watts` - Average CPU package power (watts) from RAPL readings in the query window.
+///   If Some, uses Approach B (RAPL-calibrated, proportional CPU attribution).
+///   If None, uses Approach A (fixed-weight, 0.40 CPU).
 ///
-/// # Weights (Approach A: Fixed-Weight Attribution)
-/// - CPU: 40% (RAPL-calibrated alternative in Phase 4)
-/// - GPU: 20%
-/// - Display (focus time): 15%
-/// - Disk I/O: 10%
-/// - Network: 10%
-/// - Memory: 5%
+/// # Attribution Approaches
+///
+/// **Approach A (no RAPL):**
+/// - CPU: 40% (fixed weight)
+/// - GPU: 20% | Display: 15% | Disk I/O: 10% | Network: 10% | Memory: 5%
+///
+/// **Approach B (RAPL available):**
+/// - CPU: `rapl_watts × (app_cpu_pct / total_cpu_pct)` (proportional actual watts)
+/// - GPU: 20% | Display: 15% | Disk I/O: 10% | Network: 10% | Memory: 5%
 ///
 /// # Returns
 /// Apps sorted descending by `power_pct`. Contribution fractions sum to ≤1.0 per app.
 pub fn compute_power_stats(
     app_metrics: HashMap<String, AppMetrics>,
     window_ms: u64,
+    rapl_package_watts: Option<f32>,
 ) -> Vec<AppPowerStats> {
     if window_ms == 0 {
         return Vec::new();
     }
 
-    // Compute normalization factors
+    // Compute normalization factors and needed aggregates
     let max_disk_bytes = app_metrics
         .values()
         .map(|m| m.disk_bytes)
@@ -64,6 +70,19 @@ pub fn compute_power_stats(
         .unwrap_or(1);
     let max_net_bytes = app_metrics.values().map(|m| m.net_bytes).max().unwrap_or(1);
     let total_mem_rss: u64 = app_metrics.values().flat_map(|m| &m.mem_rss).sum();
+
+    // For Approach B (RAPL-calibrated): compute total CPU % across all apps
+    // This is needed for proportional CPU attribution when RAPL is available
+    let total_cpu_pct: f32 = app_metrics
+        .values()
+        .map(|m| {
+            if m.cpu_pcts.is_empty() {
+                0.0
+            } else {
+                m.cpu_pcts.iter().sum::<f32>() / m.cpu_pcts.len() as f32
+            }
+        })
+        .sum();
 
     // Compute power scores (with intermediate components for contributions)
     let power_stats: Vec<(AppPowerStats, ScoreComponents)> = app_metrics
@@ -105,9 +124,20 @@ pub fn compute_power_stats(
                 0.0
             };
 
-            // Compute weighted components (Approach A: fixed weights)
+            // Compute weighted components (Approach A or B depending on RAPL availability)
+            let cpu_score = match rapl_package_watts {
+                Some(watts) if total_cpu_pct > 0.0 => {
+                    // Approach B: proportional CPU attribution using measured RAPL watts
+                    watts * (cpu_pct_avg / total_cpu_pct)
+                }
+                _ => {
+                    // Approach A: fixed-weight CPU (default or fallback when RAPL unavailable)
+                    0.40 * cpu_pct_avg
+                }
+            };
+
             let components = ScoreComponents {
-                cpu: 0.40 * cpu_pct_avg,
+                cpu: cpu_score,
                 gpu: 0.20 * gpu_pct_max,
                 display: 0.15 * focus_fraction,
                 disk: 0.10 * disk_normalized,
@@ -199,7 +229,7 @@ mod tests {
             },
         );
 
-        let stats = compute_power_stats(app_metrics, 1000);
+        let stats = compute_power_stats(app_metrics, 1000, None);
         assert_eq!(stats.len(), 2);
 
         // Total power_pct should sum to ~100
@@ -227,7 +257,7 @@ mod tests {
             },
         );
 
-        let stats = compute_power_stats(app_metrics, 1000);
+        let stats = compute_power_stats(app_metrics, 1000, None);
         assert_eq!(stats.len(), 1);
 
         let game = &stats[0];
@@ -243,7 +273,7 @@ mod tests {
     #[test]
     fn test_compute_power_stats_empty() {
         let app_metrics = HashMap::new();
-        let stats = compute_power_stats(app_metrics, 1000);
+        let stats = compute_power_stats(app_metrics, 1000, None);
         assert_eq!(stats.len(), 0);
     }
 
@@ -262,7 +292,142 @@ mod tests {
             },
         );
 
-        let stats = compute_power_stats(app_metrics, 0);
+        let stats = compute_power_stats(app_metrics, 0, None);
         assert_eq!(stats.len(), 0);
+    }
+
+    /// Test Approach B (RAPL-calibrated) CPU attribution.
+    #[test]
+    fn test_compute_power_stats_rapl_approach_b() {
+        let mut app_metrics = HashMap::new();
+
+        // Single app with 50% CPU usage
+        app_metrics.insert(
+            "app".to_string(),
+            AppMetrics {
+                cpu_pcts: vec![50.0],
+                gpu_pcts: vec![],
+                focus_ms: 0,
+                disk_bytes: 0,
+                net_bytes: 0,
+                mem_rss: vec![],
+            },
+        );
+
+        // Approach A (no RAPL)
+        let stats_a = compute_power_stats(app_metrics.clone(), 1000, None);
+        assert_eq!(stats_a.len(), 1);
+        let score_a = stats_a[0].power_score;
+        // Approach A: cpu_score = 0.40 * 50 = 20
+        assert!((score_a - 20.0).abs() < 0.1);
+
+        // Approach B (with RAPL: 10W total CPU power)
+        let stats_b = compute_power_stats(app_metrics, 1000, Some(10.0));
+        assert_eq!(stats_b.len(), 1);
+        let score_b = stats_b[0].power_score;
+        // Approach B: cpu_score = 10 * (50 / 50) = 10
+        // (RAPL gives actual CPU watts; app gets proportional share based on its CPU %)
+        assert!((score_b - 10.0).abs() < 0.1, "Expected ~10.0, got {}", score_b);
+        assert!(score_b < score_a, "RAPL approach should give lower score when CPU power is low");
+    }
+
+    /// Test fallback to Approach A when total CPU % is zero.
+    #[test]
+    fn test_compute_power_stats_rapl_fallback_when_zero_cpu() {
+        let mut app_metrics = HashMap::new();
+
+        // App with no CPU data
+        app_metrics.insert(
+            "app".to_string(),
+            AppMetrics {
+                cpu_pcts: vec![],
+                gpu_pcts: vec![10.0],
+                focus_ms: 1000,
+                disk_bytes: 0,
+                net_bytes: 0,
+                mem_rss: vec![],
+            },
+        );
+
+        // Even with RAPL available, if total_cpu_pct is 0, should not divide by zero
+        let stats = compute_power_stats(app_metrics, 1000, Some(20.0));
+        assert_eq!(stats.len(), 1);
+
+        // Should have GPU + display contribution but no CPU (fallback to 0.40 * 0 = 0)
+        let score = stats[0].power_score;
+        let expected_gpu = 0.20 * 10.0;      // gpu: 2.0
+        let expected_display = 0.15 * 100.0; // focus_ms: 1000 / (1000 * 1000) * 100 = ~100%
+        let expected_cpu = 0.40 * 0.0;       // no CPU: 0
+        let expected_total = expected_gpu + expected_display + expected_cpu;
+        assert!((score - expected_total).abs() < 0.1, "Expected ~{}, got {}", expected_total, score);
+    }
+
+    /// Test Approach B proportional CPU attribution with multiple apps.
+    #[test]
+    fn test_compute_power_stats_rapl_attribution() {
+        let mut app_metrics = HashMap::new();
+
+        // app1: 60% CPU usage
+        app_metrics.insert(
+            "app1".to_string(),
+            AppMetrics {
+                cpu_pcts: vec![60.0],
+                gpu_pcts: vec![],
+                focus_ms: 0,
+                disk_bytes: 0,
+                net_bytes: 0,
+                mem_rss: vec![],
+            },
+        );
+
+        // app2: 40% CPU usage
+        app_metrics.insert(
+            "app2".to_string(),
+            AppMetrics {
+                cpu_pcts: vec![40.0],
+                gpu_pcts: vec![],
+                focus_ms: 0,
+                disk_bytes: 0,
+                net_bytes: 0,
+                mem_rss: vec![],
+            },
+        );
+
+        // RAPL: 10W total CPU power
+        let stats = compute_power_stats(app_metrics, 1000, Some(10.0));
+        assert_eq!(stats.len(), 2);
+
+        // Find app1 and app2 (sorted by power_pct descending)
+        let app1 = stats.iter().find(|s| s.app_name == "app1").unwrap();
+        let app2 = stats.iter().find(|s| s.app_name == "app2").unwrap();
+
+        // Approach B: cpu_score = rapl_watts * (app_cpu_pct / total_cpu_pct)
+        // app1: 10 * (60 / 100) = 6.0
+        // app2: 10 * (40 / 100) = 4.0
+        const EPSILON: f32 = 0.1;
+        assert!(
+            (app1.power_score - 6.0).abs() < EPSILON,
+            "app1 CPU score should be ~6W, got {}",
+            app1.power_score
+        );
+        assert!(
+            (app2.power_score - 4.0).abs() < EPSILON,
+            "app2 CPU score should be ~4W, got {}",
+            app2.power_score
+        );
+
+        // Verify proportional contributions
+        let total = app1.power_score + app2.power_score;
+        assert!((total - 10.0).abs() < 0.1, "Total CPU score should be ~10W");
+        assert!(
+            (app1.power_pct - 60.0).abs() < 1.0,
+            "app1 power_pct should be ~60%, got {}",
+            app1.power_pct
+        );
+        assert!(
+            (app2.power_pct - 40.0).abs() < 1.0,
+            "app2 power_pct should be ~40%, got {}",
+            app2.power_pct
+        );
     }
 }
