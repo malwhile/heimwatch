@@ -78,8 +78,7 @@ pub fn compute_power_stats(
             let focus_fraction = focus_fraction.clamp(0.0, 100.0);
 
             let disk_normalized = if max_disk_bytes > 0 {
-                ((metrics.disk_bytes as f32 + 1.0).log2()
-                    / (max_disk_bytes as f32 + 1.0).log2())
+                ((metrics.disk_bytes as f32 + 1.0).log2() / (max_disk_bytes as f32 + 1.0).log2())
                     * 100.0
             } else {
                 0.0

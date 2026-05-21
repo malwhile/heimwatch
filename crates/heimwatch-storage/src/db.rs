@@ -986,8 +986,14 @@ mod tests {
         // app1 score = 0.40 * 50 = 20
         // app2 score = 0.40 * 50 = 20
         // total = 40, so each gets 20/40 * 100 = 50%
-        assert!((stats[0].power_pct - 50.0).abs() < 1.0, "app power_pct should be ~50%");
-        assert!((stats[1].power_pct - 50.0).abs() < 1.0, "app power_pct should be ~50%");
+        assert!(
+            (stats[0].power_pct - 50.0).abs() < 1.0,
+            "app power_pct should be ~50%"
+        );
+        assert!(
+            (stats[1].power_pct - 50.0).abs() < 1.0,
+            "app power_pct should be ~50%"
+        );
     }
 
     /// Test get_power_stats correctly computes contribution fractions.
