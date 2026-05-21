@@ -10,6 +10,7 @@
 
 use crate::error::StorageError;
 use crate::keys;
+use crate::power_calc;
 use anyhow::{Context, Result};
 use heimwatch_core::{
     AppFocusStats, AppNetworkStats, AppPowerStats, CpuData, DiskData, FocusData, GpuProcessData,
@@ -346,15 +347,19 @@ impl StorageLayer {
 
     /// Compute per-app power consumption statistics over a time range.
     ///
-    /// Uses the fixed-weight power attribution formula from the power plan:
-    /// - CPU: 0.40 (or RAPL-calibrated if available)
+    /// Uses the fixed-weight power attribution formula (Approach A):
+    /// - CPU: 0.40 (or RAPL-calibrated in Phase 4)
     /// - GPU: 0.20
     /// - Display (focus time): 0.15
     /// - Disk I/O: 0.10
     /// - Network: 0.10
     /// - Memory: 0.05
     ///
-    /// Returns apps sorted descending by power_pct.
+    /// Returns apps sorted descending by power_pct. Handles battery state filtering
+    /// via the `on_battery` parameter (Some(true) = discharging, Some(false) = charging, None = all).
+    ///
+    /// The calculation logic is in the `power_calc` module and can be swapped independently
+    /// (e.g., for Approach B RAPL-calibrated weights in Phase 4).
     pub fn get_power_stats(
         &self,
         start: u64,
@@ -375,7 +380,10 @@ impl StorageLayer {
         let foc_records = self.get_metrics_by_type(MetricType::Foc, start, end)?;
         let pwr_records = self.get_metrics_by_type(MetricType::Pwr, start, end)?;
 
-        // Filter by battery state if requested
+        // Filter by battery state if requested. Use Option<HashSet> to distinguish
+        // between "no filter requested" (None) and "filter to specific states" (Some(set)).
+        // This allows us to include or exclude timestamps based on charging state while
+        // supporting queries that span both on-battery and plugged-in periods.
         let on_battery_set: Option<std::collections::HashSet<u64>> = if let Some(true) = on_battery
         {
             Some(
@@ -414,19 +422,6 @@ impl StorageLayer {
             None
         };
 
-        // Aggregate metrics per app
-        #[derive(Default)]
-        struct AppMetrics {
-            cpu_pcts: Vec<f32>,
-            gpu_pcts: Vec<f32>,
-            focus_ms: u64,
-            disk_bytes: u64,
-            net_bytes: u64,
-            mem_rss: Vec<u64>,
-        }
-
-        let mut app_metrics: HashMap<String, AppMetrics> = HashMap::new();
-
         // Helper to check if a timestamp passes the battery filter
         let passes_filter = |ts: u64| {
             on_battery_set
@@ -435,7 +430,9 @@ impl StorageLayer {
                 .unwrap_or(true)
         };
 
-        // Process CPU
+        // Aggregate metrics per app (storage-specific logic)
+        let mut app_metrics: HashMap<String, power_calc::AppMetrics> = HashMap::new();
+
         for record in &cpu_records {
             if passes_filter(record.timestamp)
                 && let MetricPayload::Cpu(CpuData {
@@ -450,7 +447,6 @@ impl StorageLayer {
             }
         }
 
-        // Process GPU
         for record in &gpu_records {
             if passes_filter(record.timestamp)
                 && let MetricPayload::GpuProc(GpuProcessData {
@@ -466,7 +462,6 @@ impl StorageLayer {
             }
         }
 
-        // Process Focus
         for record in &foc_records {
             if passes_filter(record.timestamp)
                 && let MetricPayload::Foc(FocusData { duration_ms, .. }) = record.payload
@@ -478,7 +473,6 @@ impl StorageLayer {
             }
         }
 
-        // Process Disk
         for record in &dsk_records {
             if passes_filter(record.timestamp)
                 && let MetricPayload::Dsk(DiskData {
@@ -494,7 +488,6 @@ impl StorageLayer {
             }
         }
 
-        // Process Network
         for record in &net_records {
             if passes_filter(record.timestamp)
                 && let MetricPayload::Net(NetworkData {
@@ -508,7 +501,6 @@ impl StorageLayer {
             }
         }
 
-        // Process Memory
         for record in &mem_records {
             if passes_filter(record.timestamp)
                 && let MetricPayload::Mem(MemoryData { rss_bytes, .. }) = record.payload
@@ -521,128 +513,15 @@ impl StorageLayer {
             }
         }
 
-        // Compute averages and normalization factors
-        let max_disk_bytes = app_metrics
-            .values()
-            .map(|m| m.disk_bytes)
-            .max()
-            .unwrap_or(1);
-        let max_net_bytes = app_metrics.values().map(|m| m.net_bytes).max().unwrap_or(1);
-        let total_mem_rss: u64 = app_metrics.values().flat_map(|m| &m.mem_rss).sum();
+        // Delegate to pure calculation logic (can be swapped in Phase 4 for Approach B / RAPL)
+        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms);
 
-        // Compute power scores (with intermediate scores for contribution tracking)
-        #[derive(Default)]
-        struct ScoreComponents {
-            cpu: f32,
-            gpu: f32,
-            display: f32,
-            disk: f32,
-            net: f32,
-            mem: f32,
+        // Set on_battery field based on query filter (true if filtered to on-battery, false otherwise)
+        for stat in &mut stats {
+            stat.on_battery = on_battery.unwrap_or(false);
         }
 
-        let power_stats: Vec<(AppPowerStats, ScoreComponents)> = app_metrics
-            .into_iter()
-            .map(|(app_name, metrics)| {
-                let cpu_pct_avg = if metrics.cpu_pcts.is_empty() {
-                    0.0
-                } else {
-                    metrics.cpu_pcts.iter().sum::<f32>() / metrics.cpu_pcts.len() as f32
-                };
-
-                let gpu_pct_max = metrics.gpu_pcts.iter().cloned().fold(0.0, f32::max);
-
-                let focus_fraction = (metrics.focus_ms as f32 / window_ms as f32) * 100.0;
-                let focus_fraction = focus_fraction.clamp(0.0, 100.0);
-
-                let disk_normalized = if max_disk_bytes > 0 {
-                    ((metrics.disk_bytes as f32 + 1.0).log2()
-                        / (max_disk_bytes as f32 + 1.0).log2())
-                        * 100.0
-                } else {
-                    0.0
-                };
-
-                let net_normalized = if max_net_bytes > 0 {
-                    ((metrics.net_bytes as f32 + 1.0).log2() / (max_net_bytes as f32 + 1.0).log2())
-                        * 100.0
-                } else {
-                    0.0
-                };
-
-                let mem_fraction = if total_mem_rss > 0 {
-                    let mem_rss_avg = if metrics.mem_rss.is_empty() {
-                        0
-                    } else {
-                        metrics.mem_rss.iter().sum::<u64>() / metrics.mem_rss.len() as u64
-                    };
-                    (mem_rss_avg as f32 / total_mem_rss as f32) * 100.0
-                } else {
-                    0.0
-                };
-
-                // Compute weighted components
-                let components = ScoreComponents {
-                    cpu: 0.40 * cpu_pct_avg,
-                    gpu: 0.20 * gpu_pct_max,
-                    display: 0.15 * focus_fraction,
-                    disk: 0.10 * disk_normalized,
-                    net: 0.10 * net_normalized,
-                    mem: 0.05 * mem_fraction,
-                };
-
-                let power_score = components.cpu
-                    + components.gpu
-                    + components.display
-                    + components.disk
-                    + components.net
-                    + components.mem;
-
-                let stat = AppPowerStats {
-                    app_name,
-                    power_pct: 0.0, // Normalized later
-                    power_score,
-                    on_battery: on_battery.unwrap_or(false),
-                    cpu_contribution: 0.0,
-                    gpu_contribution: 0.0,
-                    display_contribution: 0.0,
-                    disk_contribution: 0.0,
-                    net_contribution: 0.0,
-                    mem_contribution: 0.0,
-                };
-
-                (stat, components)
-            })
-            .collect();
-
-        // Normalize scores to percentages and compute contributions
-        let total_score: f32 = power_stats.iter().map(|(s, _)| s.power_score).sum();
-        let mut final_stats = Vec::new();
-        for (mut stat, components) in power_stats {
-            if total_score > 0.0 {
-                stat.power_pct = (stat.power_score / total_score) * 100.0;
-                if stat.power_score > 0.0 {
-                    stat.cpu_contribution = components.cpu / stat.power_score;
-                    stat.gpu_contribution = components.gpu / stat.power_score;
-                    stat.display_contribution = components.display / stat.power_score;
-                    stat.disk_contribution = components.disk / stat.power_score;
-                    stat.net_contribution = components.net / stat.power_score;
-                    stat.mem_contribution = components.mem / stat.power_score;
-                }
-            }
-            final_stats.push(stat);
-        }
-
-        let mut power_stats = final_stats;
-
-        // Sort by power_pct descending
-        power_stats.sort_by(|a, b| {
-            b.power_pct
-                .partial_cmp(&a.power_pct)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        Ok(power_stats)
+        Ok(stats)
     }
 
     /// Get the top N apps by power percentage over a time range.
@@ -672,6 +551,10 @@ impl StorageLayer {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Epsilon for floating-point comparisons in tests. Accounts for rounding errors
+    /// when working with f32 arithmetic across normalization and weighted calculations.
+    const TEST_EPSILON: f32 = 0.01;
 
     /// Helper to create a temporary database.
     fn temp_db() -> (TempDir, StorageLayer) {
@@ -1103,8 +986,8 @@ mod tests {
         // app1 score = 0.40 * 50 = 20
         // app2 score = 0.40 * 50 = 20
         // total = 40, so each gets 20/40 * 100 = 50%
-        assert!((stats[0].power_pct - 50.0).abs() < 1.0);
-        assert!((stats[1].power_pct - 50.0).abs() < 1.0);
+        assert!((stats[0].power_pct - 50.0).abs() < 1.0, "app power_pct should be ~50%");
+        assert!((stats[1].power_pct - 50.0).abs() < 1.0, "app power_pct should be ~50%");
     }
 
     /// Test get_power_stats correctly computes contribution fractions.
@@ -1143,12 +1026,30 @@ mod tests {
         // CPU score = 0.40 * 40 = 16
         // GPU score = 0.20 * 60 = 12
         // total = 28, so contributions are: cpu = 16/28, gpu = 12/28
-        assert!((game.cpu_contribution - (16.0 / 28.0)).abs() < 0.01);
-        assert!((game.gpu_contribution - (12.0 / 28.0)).abs() < 0.01);
-        assert!(game.display_contribution < 0.01);
-        assert!(game.disk_contribution < 0.01);
-        assert!(game.net_contribution < 0.01);
-        assert!(game.mem_contribution < 0.01);
+        assert!(
+            (game.cpu_contribution - (16.0 / 28.0)).abs() < TEST_EPSILON,
+            "CPU contribution should be ~57%"
+        );
+        assert!(
+            (game.gpu_contribution - (12.0 / 28.0)).abs() < TEST_EPSILON,
+            "GPU contribution should be ~43%"
+        );
+        assert!(
+            game.display_contribution < TEST_EPSILON,
+            "Display contribution should be ~0%"
+        );
+        assert!(
+            game.disk_contribution < TEST_EPSILON,
+            "Disk contribution should be ~0%"
+        );
+        assert!(
+            game.net_contribution < TEST_EPSILON,
+            "Network contribution should be ~0%"
+        );
+        assert!(
+            game.mem_contribution < TEST_EPSILON,
+            "Memory contribution should be ~0%"
+        );
     }
 
     /// Test get_power_stats with no data returns empty list.
