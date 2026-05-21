@@ -539,6 +539,47 @@ Phases are organized by dependency; earlier phases enable later ones.
 
 ---
 
+## 8b. Implementation Notes and Phase 2+ Optimizations
+
+### Query Performance: `get_power_state_at()`
+
+**Current (Phase 1):** Range scan from timestamp 0 to the query timestamp.
+
+**Phase 2 optimization:** Since `Pwr` records are emitted every 30 seconds and queries need only the most recent record before a given timestamp, optimize the scan to start from `timestamp - (30 * 60)` (last 30 poll cycles, ~15 minutes) instead of 0. This reduces scans from millions of records to at most 30 for year-long datasets.
+
+```rust
+let recent_window = timestamp.saturating_sub(30 * 60); // Look back 30 minutes
+let range_start = crate::keys::range_start(&MetricType::Pwr, recent_window);
+let range_end = crate::keys::range_end(&MetricType::Pwr, timestamp);
+```
+
+### RAPL Counter Wraparound Detection
+
+**Current (Phase 1):** Uses `saturating_sub()` which silently clips to 0 on underflow (counter reset).
+
+**Phase 2 enhancement:** Detect and log wraparound events (rare: ~every 30 min at sustained 145W on typical hardware). Max energy range is typically ~262 kJ from `/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj`.
+
+```rust
+let (delta_uj, wrapped) = if energy_uj >= *prev {
+    (energy_uj - *prev, false)
+} else {
+    // Counter wrapped; compute delta assuming rollover
+    let max_range = 262_000_000; // Read from max_energy_range_uj
+    (max_range - *prev + energy_uj, true)
+};
+if wrapped {
+    log::warn!("RAPL energy counter wraparound detected; reading may be inaccurate");
+}
+```
+
+### Multi-Socket and AMD RAPL Support
+
+**Current (Phase 1):** Only checks `intel-rapl:0`.
+
+**Phase 4 enhancement:** Iterate `/sys/class/powercap/` to find all available RAPL domains (intel-rapl:0, intel-rapl:1 on dual-socket systems; AMD systems use `amd_rapl`). Aggregate package power across all sockets.
+
+---
+
 ## 9. Key sysfs Paths Reference
 
 | What | Path | Unit |
