@@ -128,5 +128,5 @@ dev-setup: install-tools install-nextest check fmt-check lint test
 ci: fmt-check lint test build-ebpf build
 	@echo "✓ CI checks passed!"
 
-code-quality: fmt lint check build-ebpf
+code-quality: lint fmt check build-ebpf
 	@echo "✓ Quality checks passed!"
