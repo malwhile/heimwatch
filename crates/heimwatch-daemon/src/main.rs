@@ -105,6 +105,24 @@ enum SnapshotCommand {
         #[arg(short, long)]
         db: String,
     },
+    /// Power usage snapshot (queries database for per-app power attribution)
+    Power {
+        /// Query window in seconds (default: last hour)
+        #[arg(short, long, default_value = "3600")]
+        window: u64,
+
+        /// Output format: text (human-readable) or json
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
+        /// Database path (required for power snapshot)
+        #[arg(short, long)]
+        db: String,
+
+        /// Maximum number of apps to show per section
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
 }
 
 #[tokio::main]
@@ -139,6 +157,14 @@ async fn main() -> anyhow::Result<()> {
             }
             SnapshotCommand::Focus { window, format, db } => {
                 snapshot::run_snapshot(window, &format, "focus", Some(&db)).await?;
+            }
+            SnapshotCommand::Power {
+                window,
+                format,
+                db,
+                limit,
+            } => {
+                snapshot::run_power_snapshot(window, &format, &db, limit).await?;
             }
         },
     }
