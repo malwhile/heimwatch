@@ -327,8 +327,15 @@ mod tests {
         let score_b = stats_b[0].power_score;
         // Approach B: cpu_score = 10 * (50 / 50) = 10
         // (RAPL gives actual CPU watts; app gets proportional share based on its CPU %)
-        assert!((score_b - 10.0).abs() < 0.1, "Expected ~10.0, got {}", score_b);
-        assert!(score_b < score_a, "RAPL approach should give lower score when CPU power is low");
+        assert!(
+            (score_b - 10.0).abs() < 0.1,
+            "Expected ~10.0, got {}",
+            score_b
+        );
+        assert!(
+            score_b < score_a,
+            "RAPL approach should give lower score when CPU power is low"
+        );
     }
 
     /// Test fallback to Approach A when total CPU % is zero.
@@ -355,11 +362,16 @@ mod tests {
 
         // Should have GPU + display contribution but no CPU (fallback to 0.40 * 0 = 0)
         let score = stats[0].power_score;
-        let expected_gpu = 0.20 * 10.0;      // gpu: 2.0
+        let expected_gpu = 0.20 * 10.0; // gpu: 2.0
         let expected_display = 0.15 * 100.0; // focus_ms: 1000 / (1000 * 1000) * 100 = ~100%
-        let expected_cpu = 0.40 * 0.0;       // no CPU: 0
+        let expected_cpu = 0.40 * 0.0; // no CPU: 0
         let expected_total = expected_gpu + expected_display + expected_cpu;
-        assert!((score - expected_total).abs() < 0.1, "Expected ~{}, got {}", expected_total, score);
+        assert!(
+            (score - expected_total).abs() < 0.1,
+            "Expected ~{}, got {}",
+            expected_total,
+            score
+        );
     }
 
     /// Test Approach B proportional CPU attribution with multiple apps.
