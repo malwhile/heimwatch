@@ -1,8 +1,8 @@
-//! One-shot metric snapshots: network traffic, CPU usage, disk I/O, memory usage, and focus time.
+//! One-shot metric snapshots: network traffic, CPU usage, disk I/O, memory usage, focus time, and power.
 
 use anyhow::{Result, anyhow};
-use heimwatch_core::{MetricPayload, MetricRecord, current_unix_timestamp};
-use heimwatch_storage::StorageLayer;
+use heimwatch_core::{MetricPayload, MetricRecord, PowerData, current_unix_timestamp};
+use heimwatch_storage::{StorageLayer, AppPowerStats};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -153,6 +153,111 @@ async fn run_focus_snapshot(window_secs: u64, format: &str, db_path: Option<&str
 
     format_output(format, &records, window_secs)?;
     Ok(())
+}
+
+/// Capture power usage snapshot (database query).
+pub async fn run_power_snapshot(
+    window_secs: u64,
+    format: &str,
+    db_path: &str,
+    limit: usize,
+) -> Result<()> {
+    log::info!("Querying power usage from last {}s...", window_secs);
+    let storage =
+        StorageLayer::open(db_path).map_err(|e| anyhow!("Failed to open database: {}", e))?;
+
+    let now = current_unix_timestamp()?;
+    let start = now.saturating_sub(window_secs);
+    let end = now;
+
+    let plugged_in = storage
+        .get_top_apps_by_power(start, end, Some(false), limit)
+        .map_err(|e| anyhow!("Failed to query power stats (plugged in): {}", e))?;
+
+    let on_battery = storage
+        .get_top_apps_by_power(start, end, Some(true), limit)
+        .map_err(|e| anyhow!("Failed to query power stats (on battery): {}", e))?;
+
+    let system_power = storage
+        .get_system_power_history(start, end)
+        .map_err(|e| anyhow!("Failed to query system power history: {}", e))?;
+
+    match format {
+        "json" => {
+            let result = serde_json::json!({
+                "window_secs": window_secs,
+                "plugged_in": plugged_in,
+                "on_battery": on_battery,
+                "system_power": system_power,
+            });
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        _ => {
+            print_power_table(&plugged_in, &on_battery, &system_power, window_secs);
+        }
+    }
+    Ok(())
+}
+
+/// Print power statistics in human-readable table format.
+fn print_power_table(
+    plugged_in: &[AppPowerStats],
+    on_battery: &[AppPowerStats],
+    system_power: &[MetricRecord],
+    window_secs: u64,
+) {
+    println!("\nPower Usage (last {}s)\n", window_secs);
+
+    print_power_section("Plugged In", plugged_in);
+    print_power_section("On Battery", on_battery);
+
+    if let Some(latest) = system_power.last()
+        && let MetricPayload::Pwr(pwr) = &latest.payload {
+        print_system_power_summary(pwr);
+    }
+}
+
+/// Print a single power section (Plugged In or On Battery).
+fn print_power_section(label: &str, stats: &[AppPowerStats]) {
+    println!("Top Apps by Power Percentage ({}):", label);
+    if stats.is_empty() {
+        let state = label.to_lowercase();
+        println!("  (no data: not in {} state during this window)\n", state);
+        return;
+    }
+
+    for (i, stat) in stats.iter().enumerate() {
+        let name = &stat.app_name;
+        let name_truncated = &name[..name.len().min(20)];
+        println!(
+            "  {:>2}. {:<20} {:>5.1}%  (CPU: {:>2.0}%, GPU: {:>2.0}%, Disp: {:>2.0}%, Disk: {:>2.0}%, Net: {:>2.0}%, Mem: {:>2.0}%)",
+            i + 1,
+            name_truncated,
+            stat.power_pct,
+            stat.cpu_contribution * 100.0,
+            stat.gpu_contribution * 100.0,
+            stat.display_contribution * 100.0,
+            stat.disk_contribution * 100.0,
+            stat.net_contribution * 100.0,
+            stat.mem_contribution * 100.0,
+        );
+    }
+    println!();
+}
+
+/// Print system-level power summary (battery, charging, RAPL).
+fn print_system_power_summary(pwr: &PowerData) {
+    println!("System Power (latest):");
+    match pwr.battery_percent {
+        Some(pct) => println!("  Battery: {:.0}%", pct),
+        None => println!("  Battery: N/A"),
+    }
+    println!("  Charging: {}", pwr.charging);
+    match pwr.rapl_package_watts {
+        Some(w) => println!("  RAPL Package: {:.1}W", w),
+        None => println!("  RAPL Package: N/A"),
+    }
+    println!();
 }
 
 /// Format output: JSON or human-readable table.
@@ -737,5 +842,70 @@ mod tests {
         ];
 
         print_snapshot_table(&records, 5);
+    }
+
+    #[test]
+    fn test_print_power_section_empty() {
+        let stats: Vec<AppPowerStats> = vec![];
+        print_power_section("Plugged In", &stats);
+    }
+
+    #[test]
+    fn test_print_power_section_with_data() {
+        let stats = vec![
+            AppPowerStats {
+                app_name: "Firefox".to_string(),
+                power_pct: 35.2,
+                power_score: 10.5,
+                on_battery: false,
+                cpu_contribution: 0.25,
+                gpu_contribution: 0.0,
+                display_contribution: 0.10,
+                disk_contribution: 0.08,
+                net_contribution: 0.02,
+                mem_contribution: 0.05,
+            },
+            AppPowerStats {
+                app_name: "VS Code".to_string(),
+                power_pct: 22.1,
+                power_score: 6.6,
+                on_battery: false,
+                cpu_contribution: 0.18,
+                gpu_contribution: 0.0,
+                display_contribution: 0.0,
+                disk_contribution: 0.03,
+                net_contribution: 0.01,
+                mem_contribution: 0.0,
+            },
+        ];
+        print_power_section("Plugged In", &stats);
+    }
+
+    #[test]
+    fn test_print_system_power_summary_with_battery() {
+        let pwr = PowerData {
+            watt_usage: 18.2,
+            battery_percent: Some(75.0),
+            charging: false,
+            rapl_package_watts: Some(18.2),
+            rapl_core_watts: None,
+            battery_current_ua: None,
+            battery_voltage_uv: None,
+        };
+        print_system_power_summary(&pwr);
+    }
+
+    #[test]
+    fn test_print_system_power_summary_no_battery() {
+        let pwr = PowerData {
+            watt_usage: 0.0,
+            battery_percent: None,
+            charging: false,
+            rapl_package_watts: None,
+            rapl_core_watts: None,
+            battery_current_ua: None,
+            battery_voltage_uv: None,
+        };
+        print_system_power_summary(&pwr);
     }
 }
