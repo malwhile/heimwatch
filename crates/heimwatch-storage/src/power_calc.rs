@@ -559,7 +559,8 @@ mod tests {
         );
 
         // No brightness (defaults to 1.0): display_score = 0.15 × 50 = 7.5
-        let stats_no_bright = compute_power_stats(app_metrics.clone(), 1000, None, None, None, None);
+        let stats_no_bright =
+            compute_power_stats(app_metrics.clone(), 1000, None, None, None, None);
         let score_no_bright = stats_no_bright[0].power_score;
         assert!((score_no_bright - 7.5).abs() < 0.1);
 
@@ -629,7 +630,8 @@ mod tests {
         );
 
         // WiFi: net_weight = 0.15
-        let stats_wifi = compute_power_stats(app_metrics.clone(), 1000, None, None, None, Some(true));
+        let stats_wifi =
+            compute_power_stats(app_metrics.clone(), 1000, None, None, None, Some(true));
         let score_wifi = stats_wifi[0].power_score;
 
         // Ethernet: net_weight = 0.05
@@ -663,7 +665,8 @@ mod tests {
         );
 
         // Ethernet: net_weight = 0.05
-        let stats_eth = compute_power_stats(app_metrics.clone(), 1000, None, None, None, Some(false));
+        let stats_eth =
+            compute_power_stats(app_metrics.clone(), 1000, None, None, None, Some(false));
         let score_eth = stats_eth[0].power_score;
 
         // Unknown: net_weight = 0.10 (baseline)
@@ -702,7 +705,10 @@ mod tests {
 
         // net_bytes normalized should give 100.0 (max=1024), so score = 0.10 * 100 = 10.0
         // But we just verify the weight is 0.10 by checking the ratio
-        assert!(score_none > 0.0, "Unknown interface should have non-zero network score");
+        assert!(
+            score_none > 0.0,
+            "Unknown interface should have non-zero network score"
+        );
         // The exact score depends on normalization, just verify it's computed
     }
 }

@@ -349,7 +349,9 @@ fn detect_default_interface_is_wifi(route_path: &Path, net_class_path: &Path) ->
         let metric_hex = parts[6].trim();
 
         // Look for default route: Destination == 00000000
-        if destination == "00000000" && let Ok(metric) = u32::from_str_radix(metric_hex, 16) {
+        if destination == "00000000"
+            && let Ok(metric) = u32::from_str_radix(metric_hex, 16)
+        {
             let iface = parts[0];
             // Keep the route with lowest metric
             match default_iface {
@@ -752,14 +754,19 @@ mod tests {
     }
 
     /// Helper to setup a mock /proc/net/route file with default route entry.
-    fn setup_mock_route_file(
-        route_file: &std::path::Path,
-        iface: &str,
-        metric_hex: &str,
-    ) {
+    fn setup_mock_route_file(route_file: &std::path::Path, iface: &str, metric_hex: &str) {
         let mut file = fs::File::create(route_file).unwrap();
-        writeln!(file, "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT").unwrap();
-        writeln!(file, "{}\t00000000\t01010101\t0003\t0\t0\t{}\tFFFFFF00\t0\t0\t0", iface, metric_hex).unwrap();
+        writeln!(
+            file,
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}\t00000000\t01010101\t0003\t0\t0\t{}\tFFFFFF00\t0\t0\t0",
+            iface, metric_hex
+        )
+        .unwrap();
     }
 
     /// Helper to setup a mock network class interface directory with wireless subdirectory.
@@ -813,9 +820,21 @@ mod tests {
 
         // Write /proc/net/route with two default routes: wifi (metric=600), eth0 (metric=100)
         let mut file = fs::File::create(&route_file).unwrap();
-        writeln!(file, "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT").unwrap();
-        writeln!(file, "wlp0s0\t00000000\t01010101\t0003\t0\t0\t258\tFFFFFF00\t0\t0\t0").unwrap(); // 258 hex = 600 dec
-        writeln!(file, "eth0\t00000000\t01010102\t0003\t0\t0\t64\tFFFFFF00\t0\t0\t0").unwrap();   // 64 hex = 100 dec
+        writeln!(
+            file,
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "wlp0s0\t00000000\t01010101\t0003\t0\t0\t258\tFFFFFF00\t0\t0\t0"
+        )
+        .unwrap(); // 258 hex = 600 dec
+        writeln!(
+            file,
+            "eth0\t00000000\t01010102\t0003\t0\t0\t64\tFFFFFF00\t0\t0\t0"
+        )
+        .unwrap(); // 64 hex = 100 dec
 
         fs::create_dir_all(&net_class_dir).unwrap();
         setup_mock_net_interface_wifi(&net_class_dir, "wlp0s0");
@@ -835,7 +854,11 @@ mod tests {
 
         // Create empty route file with only header
         let mut file = fs::File::create(&route_file).unwrap();
-        writeln!(file, "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT").unwrap();
+        writeln!(
+            file,
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"
+        )
+        .unwrap();
 
         fs::create_dir_all(&net_class_dir).unwrap();
 

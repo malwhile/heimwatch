@@ -637,7 +637,10 @@ impl StorageLayer {
     /// Unlike averaging helpers, this returns state (not a quantitative value) so we use the last reading.
     fn extract_is_wifi_last(pwr_records: &[MetricRecord]) -> Option<bool> {
         pwr_records.iter().rev().find_map(|r| {
-            if let MetricPayload::Pwr(PowerData { is_wifi: Some(v), .. }) = &r.payload {
+            if let MetricPayload::Pwr(PowerData {
+                is_wifi: Some(v), ..
+            }) = &r.payload
+            {
                 Some(*v)
             } else {
                 None
