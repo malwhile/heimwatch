@@ -517,7 +517,8 @@ impl StorageLayer {
         // (automatically uses Approach B if RAPL available, falls back to Approach A otherwise)
         let rapl_package_watts = Self::extract_rapl_average(&pwr_records);
         let freq_ratio = Self::extract_freq_ratio_average(&pwr_records);
-        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms, rapl_package_watts, freq_ratio);
+        let mut stats =
+            power_calc::compute_power_stats(app_metrics, window_ms, rapl_package_watts, freq_ratio);
 
         // Set on_battery field based on query filter (true if filtered to on-battery, false otherwise)
         for stat in &mut stats {

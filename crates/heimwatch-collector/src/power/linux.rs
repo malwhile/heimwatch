@@ -92,9 +92,7 @@ impl PowerCollector {
         };
 
         // Read CPU frequency if available
-        let avg_cpu_freq_ratio = read_avg_cpu_freq_ratio(std::path::Path::new(
-            CPU_FREQ_LOCATION,
-        ));
+        let avg_cpu_freq_ratio = read_avg_cpu_freq_ratio(std::path::Path::new(CPU_FREQ_LOCATION));
 
         let record = MetricRecord {
             app_name: "system".to_string(),
@@ -216,10 +214,7 @@ fn read_avg_cpu_freq_ratio(cpufreq_dir: &Path) -> Option<f32> {
             let filename = path.file_name()?;
 
             // Match policy directories (policy0, policy1, etc.)
-            if !filename
-                .to_string_lossy()
-                .starts_with("policy")
-            {
+            if !filename.to_string_lossy().starts_with("policy") {
                 continue;
             }
 
