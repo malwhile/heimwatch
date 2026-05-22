@@ -889,6 +889,7 @@ mod tests {
             battery_current_ua: None,
             battery_voltage_uv: None,
             avg_cpu_freq_ratio: None,
+            display_brightness: None,
         };
         print_system_power_summary(&pwr);
     }
@@ -904,6 +905,7 @@ mod tests {
             battery_current_ua: None,
             battery_voltage_uv: None,
             avg_cpu_freq_ratio: None,
+            display_brightness: None,
         };
         print_system_power_summary(&pwr);
     }

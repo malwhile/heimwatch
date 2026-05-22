@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 pub const CPU_FREQ_LOCATION: &str = "/sys/devices/system/cpu/cpufreq";
+pub const BACKLIGHT_LOCATION: &str = "/sys/class/backlight";
 
 #[derive(Default)]
 struct BatteryState {
@@ -94,6 +95,9 @@ impl PowerCollector {
         // Read CPU frequency if available
         let avg_cpu_freq_ratio = read_avg_cpu_freq_ratio(std::path::Path::new(CPU_FREQ_LOCATION));
 
+        // Read display brightness if available
+        let display_brightness = read_display_brightness(std::path::Path::new(BACKLIGHT_LOCATION));
+
         let record = MetricRecord {
             app_name: "system".to_string(),
             timestamp,
@@ -106,6 +110,7 @@ impl PowerCollector {
                 battery_current_ua: battery_state.current_ua,
                 battery_voltage_uv: battery_state.voltage_uv,
                 avg_cpu_freq_ratio,
+                display_brightness,
             }),
         };
 
@@ -229,6 +234,43 @@ fn read_avg_cpu_freq_ratio(cpufreq_dir: &Path) -> Option<f32> {
             ) {
                 if max_khz > 0 {
                     let ratio = (cur_khz as f32 / max_khz as f32).clamp(0.0, 1.0);
+                    ratios.push(ratio);
+                }
+            }
+        }
+    }
+
+    if ratios.is_empty() {
+        None
+    } else {
+        let avg = ratios.iter().sum::<f32>() / ratios.len() as f32;
+        Some(avg)
+    }
+}
+
+/// Read average display brightness across all backlight devices.
+///
+/// Reads /sys/class/backlight/*/brightness and max_brightness, computes cur/max ratio
+/// for each device, and returns the average. Returns None if no devices are readable
+/// or if all max brightnesses are zero.
+fn read_display_brightness(backlight_dir: &Path) -> Option<f32> {
+    let mut ratios = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(backlight_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            let brightness_path = path.join("brightness");
+            let max_brightness_path = path.join("max_brightness");
+
+            // Try to read both brightness values. Guard against max_brightness=0 to prevent division issues.
+            #[allow(clippy::collapsible_if)]
+            if let (Ok(brightness), Ok(max_brightness)) = (
+                read_sysfs_value::<u64>(brightness_path.to_str()?),
+                read_sysfs_value::<u64>(max_brightness_path.to_str()?),
+            ) {
+                if max_brightness > 0 {
+                    let ratio = (brightness as f32 / max_brightness as f32).clamp(0.0, 1.0);
                     ratios.push(ratio);
                 }
             }
@@ -599,5 +641,62 @@ mod tests {
 
         let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
         assert_eq!(ratio, 1.0);
+    }
+
+    /// Helper to setup a mock backlight device directory.
+    fn setup_mock_backlight_device(
+        backlight_dir: &TempDir,
+        device_name: &str,
+        brightness: u64,
+        max_brightness: u64,
+    ) {
+        let device_path = backlight_dir.path().join(device_name);
+        fs::create_dir_all(&device_path).unwrap();
+        let mut brightness_file = fs::File::create(device_path.join("brightness")).unwrap();
+        write!(brightness_file, "{}", brightness).unwrap();
+        let mut max_file = fs::File::create(device_path.join("max_brightness")).unwrap();
+        write!(max_file, "{}", max_brightness).unwrap();
+    }
+
+    /// Test display brightness with single device at 50%.
+    #[test]
+    fn test_read_display_brightness_single_device() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_backlight_device(&tmpdir, "backlight0", 3000, 6000);
+
+        let brightness = read_display_brightness(tmpdir.path()).unwrap();
+        assert!((brightness - 0.5).abs() < 0.01);
+    }
+
+    /// Test display brightness with multiple devices at different ratios.
+    #[test]
+    fn test_read_display_brightness_multiple_devices() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_backlight_device(&tmpdir, "backlight0", 4000, 6000); // 0.667
+        setup_mock_backlight_device(&tmpdir, "backlight1", 2000, 6000); // 0.333
+
+        let brightness = read_display_brightness(tmpdir.path()).unwrap();
+        // Average of 0.667 and 0.333 = 0.5
+        assert!((brightness - 0.5).abs() < 0.01);
+    }
+
+    /// Test display brightness with no devices.
+    #[test]
+    fn test_read_display_brightness_no_devices() {
+        let tmpdir = TempDir::new().unwrap();
+
+        let brightness = read_display_brightness(tmpdir.path());
+        assert!(brightness.is_none());
+    }
+
+    /// Test display brightness guards against division by zero.
+    #[test]
+    fn test_read_display_brightness_max_zero() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_backlight_device(&tmpdir, "backlight0", 3000, 0); // max_brightness = 0
+
+        // Should skip this device and return None (no valid devices)
+        let brightness = read_display_brightness(tmpdir.path());
+        assert!(brightness.is_none());
     }
 }

@@ -42,16 +42,18 @@ struct ScoreComponents {
 ///   If None, uses Approach A (fixed-weight, 0.40 CPU).
 /// * `freq_ratio` - Average CPU frequency ratio (cur_freq / max_freq) across the query window.
 ///   If Some and RAPL is None, scales Approach A CPU score by `(freq_ratio)²`.
+/// * `display_brightness` - Average display brightness ratio (cur / max) across the query window.
+///   If Some, scales display score by this fraction (defaults to 1.0 = full brightness).
 ///
 /// # Attribution Approaches
 ///
 /// **Approach A (no RAPL):**
 /// - CPU: 40% (fixed weight) × (freq_ratio)² if freq_ratio available, else 40%
-/// - GPU: 20% | Display: 15% | Disk I/O: 10% | Network: 10% | Memory: 5%
+/// - GPU: 20% | Display: 15% × display_brightness if available | Disk I/O: 10% | Network: 10% | Memory: 5%
 ///
 /// **Approach B (RAPL available):**
 /// - CPU: `rapl_watts × (app_cpu_pct / total_cpu_pct)` (proportional actual watts; freq already accounted for)
-/// - GPU: 20% | Display: 15% | Disk I/O: 10% | Network: 10% | Memory: 5%
+/// - GPU: 20% | Display: 15% × display_brightness if available | Disk I/O: 10% | Network: 10% | Memory: 5%
 ///
 /// # Returns
 /// Apps sorted descending by `power_pct`. Contribution fractions sum to ≤1.0 per app.
@@ -60,6 +62,7 @@ pub fn compute_power_stats(
     window_ms: u64,
     rapl_package_watts: Option<f32>,
     freq_ratio: Option<f32>,
+    display_brightness: Option<f32>,
 ) -> Vec<AppPowerStats> {
     if window_ms == 0 {
         return Vec::new();
@@ -147,7 +150,7 @@ pub fn compute_power_stats(
             let components = ScoreComponents {
                 cpu: cpu_score,
                 gpu: 0.20 * gpu_pct_max,
-                display: 0.15 * focus_fraction,
+                display: 0.15 * focus_fraction * display_brightness.unwrap_or(1.0),
                 disk: 0.10 * disk_normalized,
                 net: 0.10 * net_normalized,
                 mem: 0.05 * mem_fraction,
@@ -237,7 +240,7 @@ mod tests {
             },
         );
 
-        let stats = compute_power_stats(app_metrics, 1000, None, None);
+        let stats = compute_power_stats(app_metrics, 1000, None, None, None);
         assert_eq!(stats.len(), 2);
 
         // Total power_pct should sum to ~100
@@ -265,7 +268,7 @@ mod tests {
             },
         );
 
-        let stats = compute_power_stats(app_metrics, 1000, None, None);
+        let stats = compute_power_stats(app_metrics, 1000, None, None, None);
         assert_eq!(stats.len(), 1);
 
         let game = &stats[0];
@@ -281,7 +284,7 @@ mod tests {
     #[test]
     fn test_compute_power_stats_empty() {
         let app_metrics = HashMap::new();
-        let stats = compute_power_stats(app_metrics, 1000, None, None);
+        let stats = compute_power_stats(app_metrics, 1000, None, None, None);
         assert_eq!(stats.len(), 0);
     }
 
@@ -300,7 +303,7 @@ mod tests {
             },
         );
 
-        let stats = compute_power_stats(app_metrics, 0, None, None);
+        let stats = compute_power_stats(app_metrics, 0, None, None, None);
         assert_eq!(stats.len(), 0);
     }
 
@@ -323,14 +326,14 @@ mod tests {
         );
 
         // Approach A (no RAPL)
-        let stats_a = compute_power_stats(app_metrics.clone(), 1000, None, None);
+        let stats_a = compute_power_stats(app_metrics.clone(), 1000, None, None, None);
         assert_eq!(stats_a.len(), 1);
         let score_a = stats_a[0].power_score;
         // Approach A: cpu_score = 0.40 * 50 = 20
         assert!((score_a - 20.0).abs() < 0.1);
 
         // Approach B (with RAPL: 10W total CPU power)
-        let stats_b = compute_power_stats(app_metrics, 1000, Some(10.0), None);
+        let stats_b = compute_power_stats(app_metrics, 1000, Some(10.0), None, None);
         assert_eq!(stats_b.len(), 1);
         let score_b = stats_b[0].power_score;
         // Approach B: cpu_score = 10 * (50 / 50) = 10
@@ -365,7 +368,7 @@ mod tests {
         );
 
         // Even with RAPL available, if total_cpu_pct is 0, should not divide by zero
-        let stats = compute_power_stats(app_metrics, 1000, Some(20.0), None);
+        let stats = compute_power_stats(app_metrics, 1000, Some(20.0), None, None);
         assert_eq!(stats.len(), 1);
 
         // Should have GPU + display contribution but no CPU (fallback to 0.40 * 0 = 0)
@@ -414,7 +417,7 @@ mod tests {
         );
 
         // RAPL: 10W total CPU power
-        let stats = compute_power_stats(app_metrics, 1000, Some(10.0), None);
+        let stats = compute_power_stats(app_metrics, 1000, Some(10.0), None, None);
         assert_eq!(stats.len(), 2);
 
         // Find app1 and app2 (sorted by power_pct descending)
@@ -470,12 +473,12 @@ mod tests {
         );
 
         // Approach A with freq_ratio=None: cpu_score = 0.40 * 40 = 16.0
-        let stats_no_freq = compute_power_stats(app_metrics.clone(), 1000, None, None);
+        let stats_no_freq = compute_power_stats(app_metrics.clone(), 1000, None, None, None);
         let score_no_freq = stats_no_freq[0].power_score;
         assert!((score_no_freq - 16.0).abs() < 0.1);
 
         // Approach A with freq_ratio=0.5: cpu_score = 0.40 * 40 * (0.5)² = 4.0
-        let stats_with_freq = compute_power_stats(app_metrics, 1000, None, Some(0.5));
+        let stats_with_freq = compute_power_stats(app_metrics, 1000, None, Some(0.5), None);
         let score_with_freq = stats_with_freq[0].power_score;
         assert!((score_with_freq - 4.0).abs() < 0.1);
 
@@ -507,12 +510,12 @@ mod tests {
         );
 
         // With RAPL, no freq_ratio: cpu_score = 10 * (50 / 50) = 10
-        let stats_rapl_no_freq = compute_power_stats(app_metrics.clone(), 1000, Some(10.0), None);
+        let stats_rapl_no_freq = compute_power_stats(app_metrics.clone(), 1000, Some(10.0), None, None);
         let score_rapl_no_freq = stats_rapl_no_freq[0].power_score;
         assert!((score_rapl_no_freq - 10.0).abs() < 0.1);
 
         // With RAPL and freq_ratio=0.5, should give same result (freq_ratio ignored)
-        let stats_rapl_with_freq = compute_power_stats(app_metrics, 1000, Some(10.0), Some(0.5));
+        let stats_rapl_with_freq = compute_power_stats(app_metrics, 1000, Some(10.0), Some(0.5), None);
         let score_rapl_with_freq = stats_rapl_with_freq[0].power_score;
         assert!((score_rapl_with_freq - 10.0).abs() < 0.1);
 
@@ -522,6 +525,78 @@ mod tests {
             "RAPL should ignore freq_ratio, got {} vs {}",
             score_rapl_no_freq,
             score_rapl_with_freq
+        );
+    }
+
+    /// Test display brightness scaling of display component.
+    /// With display_brightness=0.5 and focus_ms=500 (50% of 1000ms window),
+    /// display_score should be 0.15 × 50 × 0.5 = 3.75 vs 7.5 without brightness.
+    #[test]
+    fn test_compute_power_stats_display_brightness_scaling() {
+        let mut app_metrics = HashMap::new();
+
+        app_metrics.insert(
+            "app".to_string(),
+            AppMetrics {
+                cpu_pcts: vec![],
+                gpu_pcts: vec![],
+                focus_ms: 500,
+                disk_bytes: 0,
+                net_bytes: 0,
+                mem_rss: vec![],
+            },
+        );
+
+        // No brightness (defaults to 1.0): display_score = 0.15 × 50 = 7.5
+        let stats_no_bright = compute_power_stats(app_metrics.clone(), 1000, None, None, None);
+        let score_no_bright = stats_no_bright[0].power_score;
+        assert!((score_no_bright - 7.5).abs() < 0.1);
+
+        // With brightness=0.5: display_score = 0.15 × 50 × 0.5 = 3.75
+        let stats_with_bright = compute_power_stats(app_metrics, 1000, None, None, Some(0.5));
+        let score_with_bright = stats_with_bright[0].power_score;
+        assert!((score_with_bright - 3.75).abs() < 0.1);
+
+        // Verify the scaling: score should be halved when brightness is 0.5
+        assert!(
+            (score_with_bright - score_no_bright * 0.5).abs() < 0.01,
+            "Display score should scale by brightness, got {} vs {}",
+            score_with_bright,
+            score_no_bright * 0.5
+        );
+    }
+
+    /// Test that display_brightness=None defaults to 1.0 (full brightness).
+    /// Should produce identical results to Some(1.0).
+    #[test]
+    fn test_compute_power_stats_display_brightness_none_defaults_full() {
+        let mut app_metrics = HashMap::new();
+
+        app_metrics.insert(
+            "app".to_string(),
+            AppMetrics {
+                cpu_pcts: vec![],
+                gpu_pcts: vec![],
+                focus_ms: 600,
+                disk_bytes: 0,
+                net_bytes: 0,
+                mem_rss: vec![],
+            },
+        );
+
+        // None (defaults to 1.0): display_score = 0.15 × 60 × 1.0 = 9.0
+        let stats_none = compute_power_stats(app_metrics.clone(), 1000, None, None, None);
+        let score_none = stats_none[0].power_score;
+
+        // Explicit Some(1.0): should be identical
+        let stats_one = compute_power_stats(app_metrics, 1000, None, None, Some(1.0));
+        let score_one = stats_one[0].power_score;
+
+        assert!(
+            (score_none - score_one).abs() < 0.01,
+            "None should default to 1.0, got {} vs {}",
+            score_none,
+            score_one
         );
     }
 }
