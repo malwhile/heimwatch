@@ -69,6 +69,7 @@ pub struct PowerData {
     pub battery_voltage_uv: Option<u64>, // µV
     pub avg_cpu_freq_ratio: Option<f32>, // average(cur_freq/max_freq) across all cpufreq policies
     pub display_brightness: Option<f32>, // average(cur/max) across all backlight devices, 0.0–1.0
+    pub is_wifi: Option<bool>,           // true if default route is over WiFi, false if Ethernet, None if unknown
 }
 
 /// Window focus data.

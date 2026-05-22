@@ -890,6 +890,7 @@ mod tests {
             battery_voltage_uv: None,
             avg_cpu_freq_ratio: None,
             display_brightness: None,
+            is_wifi: None,
         };
         print_system_power_summary(&pwr);
     }
@@ -906,6 +907,7 @@ mod tests {
             battery_voltage_uv: None,
             avg_cpu_freq_ratio: None,
             display_brightness: None,
+            is_wifi: None,
         };
         print_system_power_summary(&pwr);
     }

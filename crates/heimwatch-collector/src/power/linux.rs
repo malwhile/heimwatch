@@ -18,6 +18,8 @@ use tokio::sync::{mpsc, watch};
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 pub const CPU_FREQ_LOCATION: &str = "/sys/devices/system/cpu/cpufreq";
 pub const BACKLIGHT_LOCATION: &str = "/sys/class/backlight";
+pub const NET_ROUTE_PATH: &str = "/proc/net/route";
+pub const NET_CLASS_PATH: &str = "/sys/class/net";
 
 #[derive(Default)]
 struct BatteryState {
@@ -98,6 +100,12 @@ impl PowerCollector {
         // Read display brightness if available
         let display_brightness = read_display_brightness(std::path::Path::new(BACKLIGHT_LOCATION));
 
+        // Detect WiFi vs Ethernet
+        let is_wifi = detect_default_interface_is_wifi(
+            std::path::Path::new(NET_ROUTE_PATH),
+            std::path::Path::new(NET_CLASS_PATH),
+        );
+
         let record = MetricRecord {
             app_name: "system".to_string(),
             timestamp,
@@ -111,6 +119,7 @@ impl PowerCollector {
                 battery_voltage_uv: battery_state.voltage_uv,
                 avg_cpu_freq_ratio,
                 display_brightness,
+                is_wifi,
             }),
         };
 
@@ -315,6 +324,48 @@ fn read_rapl_power(rapl_path: &str, prev_energy_uj: &mut Option<u64>) -> Result<
 
     *prev_energy_uj = Some(energy_uj);
     Ok(power_watts)
+}
+
+/// Detect if the default route interface is WiFi or Ethernet.
+///
+/// Parses /proc/net/route to find the default route entry (Destination 00000000),
+/// selects the one with the lowest metric, then checks if the interface has a
+/// wireless/ subdirectory under /sys/class/net/{iface}/.
+///
+/// Returns Some(true) if WiFi, Some(false) if Ethernet, None if unable to determine.
+fn detect_default_interface_is_wifi(route_path: &Path, net_class_path: &Path) -> Option<bool> {
+    // Read /proc/net/route and find default route with lowest metric
+    let route_content = std::fs::read_to_string(route_path).ok()?;
+    let mut default_iface: Option<(&str, u32)> = None;
+
+    for line in route_content.lines().skip(1) {
+        // Skip header line
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+
+        let destination = parts[1].trim();
+        let metric_hex = parts[6].trim();
+
+        // Look for default route: Destination == 00000000
+        if destination == "00000000" && let Ok(metric) = u32::from_str_radix(metric_hex, 16) {
+            let iface = parts[0];
+            // Keep the route with lowest metric
+            match default_iface {
+                None => default_iface = Some((iface, metric)),
+                Some((_, prev_metric)) if metric < prev_metric => {
+                    default_iface = Some((iface, metric));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Check if the default interface has a wireless/ subdirectory
+    let iface = default_iface.map(|(i, _)| i)?;
+    let wireless_path = net_class_path.join(iface).join("wireless");
+    Some(wireless_path.is_dir())
 }
 
 #[cfg(test)]
@@ -698,5 +749,97 @@ mod tests {
         // Should skip this device and return None (no valid devices)
         let brightness = read_display_brightness(tmpdir.path());
         assert!(brightness.is_none());
+    }
+
+    /// Helper to setup a mock /proc/net/route file with default route entry.
+    fn setup_mock_route_file(
+        route_file: &std::path::Path,
+        iface: &str,
+        metric_hex: &str,
+    ) {
+        let mut file = fs::File::create(route_file).unwrap();
+        writeln!(file, "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT").unwrap();
+        writeln!(file, "{}\t00000000\t01010101\t0003\t0\t0\t{}\tFFFFFF00\t0\t0\t0", iface, metric_hex).unwrap();
+    }
+
+    /// Helper to setup a mock network class interface directory with wireless subdirectory.
+    fn setup_mock_net_interface_wifi(net_class_dir: &std::path::Path, iface: &str) {
+        let iface_path = net_class_dir.join(iface);
+        fs::create_dir_all(iface_path.join("wireless")).unwrap();
+    }
+
+    /// Helper to setup a mock network class interface directory without wireless subdirectory.
+    fn setup_mock_net_interface_ethernet(net_class_dir: &std::path::Path, iface: &str) {
+        let iface_path = net_class_dir.join(iface);
+        fs::create_dir_all(&iface_path).unwrap();
+    }
+
+    /// Test WiFi detection returns true when wireless/ subdirectory exists.
+    #[test]
+    fn test_detect_default_interface_wifi() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        setup_mock_route_file(&route_file, "wlp0s0", "64");
+        fs::create_dir_all(&net_class_dir).unwrap();
+        setup_mock_net_interface_wifi(&net_class_dir, "wlp0s0");
+
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, Some(true));
+    }
+
+    /// Test Ethernet detection returns false when wireless/ subdirectory does not exist.
+    #[test]
+    fn test_detect_default_interface_ethernet() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        setup_mock_route_file(&route_file, "eth0", "64");
+        fs::create_dir_all(&net_class_dir).unwrap();
+        setup_mock_net_interface_ethernet(&net_class_dir, "eth0");
+
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, Some(false));
+    }
+
+    /// Test that the route with lowest metric is selected when multiple defaults exist.
+    #[test]
+    fn test_detect_default_interface_lowest_metric_wins() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        // Write /proc/net/route with two default routes: wifi (metric=600), eth0 (metric=100)
+        let mut file = fs::File::create(&route_file).unwrap();
+        writeln!(file, "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT").unwrap();
+        writeln!(file, "wlp0s0\t00000000\t01010101\t0003\t0\t0\t258\tFFFFFF00\t0\t0\t0").unwrap(); // 258 hex = 600 dec
+        writeln!(file, "eth0\t00000000\t01010102\t0003\t0\t0\t64\tFFFFFF00\t0\t0\t0").unwrap();   // 64 hex = 100 dec
+
+        fs::create_dir_all(&net_class_dir).unwrap();
+        setup_mock_net_interface_wifi(&net_class_dir, "wlp0s0");
+        setup_mock_net_interface_ethernet(&net_class_dir, "eth0");
+
+        // Should select eth0 (metric 100 < 600)
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, Some(false));
+    }
+
+    /// Test that None is returned when no routes are found.
+    #[test]
+    fn test_detect_default_interface_no_routes() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        // Create empty route file with only header
+        let mut file = fs::File::create(&route_file).unwrap();
+        writeln!(file, "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT").unwrap();
+
+        fs::create_dir_all(&net_class_dir).unwrap();
+
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, None);
     }
 }
