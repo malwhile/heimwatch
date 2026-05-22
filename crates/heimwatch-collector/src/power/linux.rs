@@ -16,6 +16,10 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
+pub const CPU_FREQ_LOCATION: &str = "/sys/devices/system/cpu/cpufreq";
+pub const BACKLIGHT_LOCATION: &str = "/sys/class/backlight";
+pub const NET_ROUTE_PATH: &str = "/proc/net/route";
+pub const NET_CLASS_PATH: &str = "/sys/class/net";
 
 #[derive(Default)]
 struct BatteryState {
@@ -90,6 +94,18 @@ impl PowerCollector {
             (None, 0.0)
         };
 
+        // Read CPU frequency if available
+        let avg_cpu_freq_ratio = read_avg_cpu_freq_ratio(std::path::Path::new(CPU_FREQ_LOCATION));
+
+        // Read display brightness if available
+        let display_brightness = read_display_brightness(std::path::Path::new(BACKLIGHT_LOCATION));
+
+        // Detect WiFi vs Ethernet
+        let is_wifi = detect_default_interface_is_wifi(
+            std::path::Path::new(NET_ROUTE_PATH),
+            std::path::Path::new(NET_CLASS_PATH),
+        );
+
         let record = MetricRecord {
             app_name: "system".to_string(),
             timestamp,
@@ -101,6 +117,9 @@ impl PowerCollector {
                 rapl_core_watts: None,
                 battery_current_ua: battery_state.current_ua,
                 battery_voltage_uv: battery_state.voltage_uv,
+                avg_cpu_freq_ratio,
+                display_brightness,
+                is_wifi,
             }),
         };
 
@@ -195,6 +214,86 @@ where
         .map_err(|e| anyhow::anyhow!("Failed to parse '{}': {}", path, e))
 }
 
+/// Read average CPU frequency ratio across all cpufreq policies.
+///
+/// Reads /sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq and cpuinfo_max_freq,
+/// computes cur/max ratio for each policy, and returns the average. Returns None if no
+/// policies are readable or if all max frequencies are zero.
+fn read_avg_cpu_freq_ratio(cpufreq_dir: &Path) -> Option<f32> {
+    let mut ratios = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(cpufreq_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let filename = path.file_name()?;
+
+            // Match policy directories (policy0, policy1, etc.)
+            if !filename.to_string_lossy().starts_with("policy") {
+                continue;
+            }
+
+            let cur_freq_path = path.join("scaling_cur_freq");
+            let max_freq_path = path.join("cpuinfo_max_freq");
+
+            // Try to read both frequency values. Guard against max_khz=0 to prevent division issues.
+            #[allow(clippy::collapsible_if)]
+            if let (Ok(cur_khz), Ok(max_khz)) = (
+                read_sysfs_value::<u32>(cur_freq_path.to_str()?),
+                read_sysfs_value::<u32>(max_freq_path.to_str()?),
+            ) {
+                if max_khz > 0 {
+                    let ratio = (cur_khz as f32 / max_khz as f32).clamp(0.0, 1.0);
+                    ratios.push(ratio);
+                }
+            }
+        }
+    }
+
+    if ratios.is_empty() {
+        None
+    } else {
+        let avg = ratios.iter().sum::<f32>() / ratios.len() as f32;
+        Some(avg)
+    }
+}
+
+/// Read average display brightness across all backlight devices.
+///
+/// Reads /sys/class/backlight/*/brightness and max_brightness, computes cur/max ratio
+/// for each device, and returns the average. Returns None if no devices are readable
+/// or if all max brightnesses are zero.
+fn read_display_brightness(backlight_dir: &Path) -> Option<f32> {
+    let mut ratios = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(backlight_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            let brightness_path = path.join("brightness");
+            let max_brightness_path = path.join("max_brightness");
+
+            // Try to read both brightness values. Guard against max_brightness=0 to prevent division issues.
+            #[allow(clippy::collapsible_if)]
+            if let (Ok(brightness), Ok(max_brightness)) = (
+                read_sysfs_value::<u64>(brightness_path.to_str()?),
+                read_sysfs_value::<u64>(max_brightness_path.to_str()?),
+            ) {
+                if max_brightness > 0 {
+                    let ratio = (brightness as f32 / max_brightness as f32).clamp(0.0, 1.0);
+                    ratios.push(ratio);
+                }
+            }
+        }
+    }
+
+    if ratios.is_empty() {
+        None
+    } else {
+        let avg = ratios.iter().sum::<f32>() / ratios.len() as f32;
+        Some(avg)
+    }
+}
+
 /// Discover RAPL energy counter path.
 ///
 /// Currently only checks intel-rapl:0 (Intel single-socket). Phase 4 enhancement:
@@ -225,6 +324,50 @@ fn read_rapl_power(rapl_path: &str, prev_energy_uj: &mut Option<u64>) -> Result<
 
     *prev_energy_uj = Some(energy_uj);
     Ok(power_watts)
+}
+
+/// Detect if the default route interface is WiFi or Ethernet.
+///
+/// Parses /proc/net/route to find the default route entry (Destination 00000000),
+/// selects the one with the lowest metric, then checks if the interface has a
+/// wireless/ subdirectory under /sys/class/net/{iface}/.
+///
+/// Returns Some(true) if WiFi, Some(false) if Ethernet, None if unable to determine.
+fn detect_default_interface_is_wifi(route_path: &Path, net_class_path: &Path) -> Option<bool> {
+    // Read /proc/net/route and find default route with lowest metric
+    let route_content = std::fs::read_to_string(route_path).ok()?;
+    let mut default_iface: Option<(&str, u32)> = None;
+
+    for line in route_content.lines().skip(1) {
+        // Skip header line
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+
+        let destination = parts[1].trim();
+        let metric_hex = parts[6].trim();
+
+        // Look for default route: Destination == 00000000
+        if destination == "00000000"
+            && let Ok(metric) = u32::from_str_radix(metric_hex, 16)
+        {
+            let iface = parts[0];
+            // Keep the route with lowest metric
+            match default_iface {
+                None => default_iface = Some((iface, metric)),
+                Some((_, prev_metric)) if metric < prev_metric => {
+                    default_iface = Some((iface, metric));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Check if the default interface has a wireless/ subdirectory
+    let iface = default_iface.map(|(i, _)| i)?;
+    let wireless_path = net_class_path.join(iface).join("wireless");
+    Some(wireless_path.is_dir())
 }
 
 #[cfg(test)]
@@ -483,5 +626,243 @@ mod tests {
         assert_eq!(state.current_ua, None);
         assert_eq!(state.voltage_uv, None);
         assert_eq!(state.status, None);
+    }
+
+    /// Helper to setup a mock cpufreq policy directory.
+    fn setup_mock_cpufreq_policy(
+        cpufreq_dir: &TempDir,
+        policy_name: &str,
+        cur_khz: u32,
+        max_khz: u32,
+    ) {
+        let policy_path = cpufreq_dir.path().join(policy_name);
+        fs::create_dir_all(&policy_path).unwrap();
+        let mut cur_file = fs::File::create(policy_path.join("scaling_cur_freq")).unwrap();
+        write!(cur_file, "{}", cur_khz).unwrap();
+        let mut max_file = fs::File::create(policy_path.join("cpuinfo_max_freq")).unwrap();
+        write!(max_file, "{}", max_khz).unwrap();
+    }
+
+    /// Test CPU frequency ratio with single policy at 50%.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_single_policy() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 2500000, 5000000);
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
+        assert!((ratio - 0.5).abs() < 0.01);
+    }
+
+    /// Test CPU frequency ratio with multiple policies at different ratios.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_multiple_policies() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 3000000, 5000000); // 0.6
+        setup_mock_cpufreq_policy(&tmpdir, "policy1", 2000000, 5000000); // 0.4
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
+        // Average of 0.6 and 0.4 = 0.5
+        assert!((ratio - 0.5).abs() < 0.01);
+    }
+
+    /// Test CPU frequency ratio with no policies.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_no_policies() {
+        let tmpdir = TempDir::new().unwrap();
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path());
+        assert!(ratio.is_none());
+    }
+
+    /// Test CPU frequency ratio guards against division by zero.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_max_freq_zero() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 2500000, 0); // max_khz = 0
+
+        // Should skip this policy and return None (no valid policies)
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path());
+        assert!(ratio.is_none());
+    }
+
+    /// Test CPU frequency ratio with clamping to [0.0, 1.0] (shouldn't happen, but be safe).
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_clamped() {
+        let tmpdir = TempDir::new().unwrap();
+        // Cur > max (shouldn't happen on real systems, but test the clamp)
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 6000000, 5000000); // 1.2 → clamped to 1.0
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
+        assert_eq!(ratio, 1.0);
+    }
+
+    /// Helper to setup a mock backlight device directory.
+    fn setup_mock_backlight_device(
+        backlight_dir: &TempDir,
+        device_name: &str,
+        brightness: u64,
+        max_brightness: u64,
+    ) {
+        let device_path = backlight_dir.path().join(device_name);
+        fs::create_dir_all(&device_path).unwrap();
+        let mut brightness_file = fs::File::create(device_path.join("brightness")).unwrap();
+        write!(brightness_file, "{}", brightness).unwrap();
+        let mut max_file = fs::File::create(device_path.join("max_brightness")).unwrap();
+        write!(max_file, "{}", max_brightness).unwrap();
+    }
+
+    /// Test display brightness with single device at 50%.
+    #[test]
+    fn test_read_display_brightness_single_device() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_backlight_device(&tmpdir, "backlight0", 3000, 6000);
+
+        let brightness = read_display_brightness(tmpdir.path()).unwrap();
+        assert!((brightness - 0.5).abs() < 0.01);
+    }
+
+    /// Test display brightness with multiple devices at different ratios.
+    #[test]
+    fn test_read_display_brightness_multiple_devices() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_backlight_device(&tmpdir, "backlight0", 4000, 6000); // 0.667
+        setup_mock_backlight_device(&tmpdir, "backlight1", 2000, 6000); // 0.333
+
+        let brightness = read_display_brightness(tmpdir.path()).unwrap();
+        // Average of 0.667 and 0.333 = 0.5
+        assert!((brightness - 0.5).abs() < 0.01);
+    }
+
+    /// Test display brightness with no devices.
+    #[test]
+    fn test_read_display_brightness_no_devices() {
+        let tmpdir = TempDir::new().unwrap();
+
+        let brightness = read_display_brightness(tmpdir.path());
+        assert!(brightness.is_none());
+    }
+
+    /// Test display brightness guards against division by zero.
+    #[test]
+    fn test_read_display_brightness_max_zero() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_backlight_device(&tmpdir, "backlight0", 3000, 0); // max_brightness = 0
+
+        // Should skip this device and return None (no valid devices)
+        let brightness = read_display_brightness(tmpdir.path());
+        assert!(brightness.is_none());
+    }
+
+    /// Helper to setup a mock /proc/net/route file with default route entry.
+    fn setup_mock_route_file(route_file: &std::path::Path, iface: &str, metric_hex: &str) {
+        let mut file = fs::File::create(route_file).unwrap();
+        writeln!(
+            file,
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}\t00000000\t01010101\t0003\t0\t0\t{}\tFFFFFF00\t0\t0\t0",
+            iface, metric_hex
+        )
+        .unwrap();
+    }
+
+    /// Helper to setup a mock network class interface directory with wireless subdirectory.
+    fn setup_mock_net_interface_wifi(net_class_dir: &std::path::Path, iface: &str) {
+        let iface_path = net_class_dir.join(iface);
+        fs::create_dir_all(iface_path.join("wireless")).unwrap();
+    }
+
+    /// Helper to setup a mock network class interface directory without wireless subdirectory.
+    fn setup_mock_net_interface_ethernet(net_class_dir: &std::path::Path, iface: &str) {
+        let iface_path = net_class_dir.join(iface);
+        fs::create_dir_all(&iface_path).unwrap();
+    }
+
+    /// Test WiFi detection returns true when wireless/ subdirectory exists.
+    #[test]
+    fn test_detect_default_interface_wifi() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        setup_mock_route_file(&route_file, "wlp0s0", "64");
+        fs::create_dir_all(&net_class_dir).unwrap();
+        setup_mock_net_interface_wifi(&net_class_dir, "wlp0s0");
+
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, Some(true));
+    }
+
+    /// Test Ethernet detection returns false when wireless/ subdirectory does not exist.
+    #[test]
+    fn test_detect_default_interface_ethernet() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        setup_mock_route_file(&route_file, "eth0", "64");
+        fs::create_dir_all(&net_class_dir).unwrap();
+        setup_mock_net_interface_ethernet(&net_class_dir, "eth0");
+
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, Some(false));
+    }
+
+    /// Test that the route with lowest metric is selected when multiple defaults exist.
+    #[test]
+    fn test_detect_default_interface_lowest_metric_wins() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        // Write /proc/net/route with two default routes: wifi (metric=600), eth0 (metric=100)
+        let mut file = fs::File::create(&route_file).unwrap();
+        writeln!(
+            file,
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "wlp0s0\t00000000\t01010101\t0003\t0\t0\t258\tFFFFFF00\t0\t0\t0"
+        )
+        .unwrap(); // 258 hex = 600 dec
+        writeln!(
+            file,
+            "eth0\t00000000\t01010102\t0003\t0\t0\t64\tFFFFFF00\t0\t0\t0"
+        )
+        .unwrap(); // 64 hex = 100 dec
+
+        fs::create_dir_all(&net_class_dir).unwrap();
+        setup_mock_net_interface_wifi(&net_class_dir, "wlp0s0");
+        setup_mock_net_interface_ethernet(&net_class_dir, "eth0");
+
+        // Should select eth0 (metric 100 < 600)
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, Some(false));
+    }
+
+    /// Test that None is returned when no routes are found.
+    #[test]
+    fn test_detect_default_interface_no_routes() {
+        let tmpdir = TempDir::new().unwrap();
+        let route_file = tmpdir.path().join("route");
+        let net_class_dir = tmpdir.path().join("net_class");
+
+        // Create empty route file with only header
+        let mut file = fs::File::create(&route_file).unwrap();
+        writeln!(
+            file,
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"
+        )
+        .unwrap();
+
+        fs::create_dir_all(&net_class_dir).unwrap();
+
+        let result = detect_default_interface_is_wifi(&route_file, &net_class_dir);
+        assert_eq!(result, None);
     }
 }

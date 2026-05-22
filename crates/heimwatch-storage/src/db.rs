@@ -513,10 +513,20 @@ impl StorageLayer {
             }
         }
 
-        // Extract RAPL data and delegate to pure calculation logic
+        // Extract RAPL data, CPU frequency ratio, display brightness, and WiFi state, then delegate to pure calculation logic
         // (automatically uses Approach B if RAPL available, falls back to Approach A otherwise)
         let rapl_package_watts = Self::extract_rapl_average(&pwr_records);
-        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms, rapl_package_watts);
+        let freq_ratio = Self::extract_freq_ratio_average(&pwr_records);
+        let display_brightness = Self::extract_display_brightness_average(&pwr_records);
+        let is_wifi = Self::extract_is_wifi_last(&pwr_records);
+        let mut stats = power_calc::compute_power_stats(
+            app_metrics,
+            window_ms,
+            rapl_package_watts,
+            freq_ratio,
+            display_brightness,
+            is_wifi,
+        );
 
         // Set on_battery field based on query filter (true if filtered to on-battery, false otherwise)
         for stat in &mut stats {
@@ -574,6 +584,69 @@ impl StorageLayer {
             Some(values.iter().sum::<f32>() / values.len() as f32)
         }
     }
+
+    fn extract_freq_ratio_average(pwr_records: &[MetricRecord]) -> Option<f32> {
+        let values: Vec<f32> = pwr_records
+            .iter()
+            .filter_map(|r| {
+                if let MetricPayload::Pwr(PowerData {
+                    avg_cpu_freq_ratio: Some(ratio),
+                    ..
+                }) = &r.payload
+                {
+                    Some(*ratio)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().sum::<f32>() / values.len() as f32)
+        }
+    }
+
+    fn extract_display_brightness_average(pwr_records: &[MetricRecord]) -> Option<f32> {
+        let values: Vec<f32> = pwr_records
+            .iter()
+            .filter_map(|r| {
+                if let MetricPayload::Pwr(PowerData {
+                    display_brightness: Some(brightness),
+                    ..
+                }) = &r.payload
+                {
+                    Some(*brightness)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().sum::<f32>() / values.len() as f32)
+        }
+    }
+
+    /// Extract the most recent WiFi detection result from power records in a window.
+    ///
+    /// Returns the most recent non-None is_wifi value, or None if no detection data is available.
+    /// Unlike averaging helpers, this returns state (not a quantitative value) so we use the last reading.
+    fn extract_is_wifi_last(pwr_records: &[MetricRecord]) -> Option<bool> {
+        pwr_records.iter().rev().find_map(|r| {
+            if let MetricPayload::Pwr(PowerData {
+                is_wifi: Some(v), ..
+            }) = &r.payload
+            {
+                Some(*v)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -609,6 +682,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -624,6 +700,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -639,6 +718,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -674,6 +756,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -699,6 +784,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: Some(-100),
                 battery_voltage_uv: Some(12_000_000),
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -761,6 +849,9 @@ mod tests {
             rapl_core_watts: Some(10.2),
             battery_current_ua: Some(-500),
             battery_voltage_uv: Some(11_500_000),
+            avg_cpu_freq_ratio: None,
+            display_brightness: None,
+            is_wifi: None,
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -789,6 +880,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: Some(-1000),
                 battery_voltage_uv: Some(12_500_000),
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         };
 
@@ -852,6 +946,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -867,6 +964,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -927,6 +1027,9 @@ mod tests {
                     rapl_core_watts: None,
                     battery_current_ua: None,
                     battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
+                    display_brightness: None,
+                    is_wifi: None,
                 }),
             },
             MetricRecord {
@@ -940,6 +1043,9 @@ mod tests {
                     rapl_core_watts: None,
                     battery_current_ua: None,
                     battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
+                    display_brightness: None,
+                    is_wifi: None,
                 }),
             },
             MetricRecord {
@@ -953,6 +1059,9 @@ mod tests {
                     rapl_core_watts: None,
                     battery_current_ua: None,
                     battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
+                    display_brightness: None,
+                    is_wifi: None,
                 }),
             },
         ];
@@ -1177,6 +1286,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
@@ -1241,6 +1353,9 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
+                display_brightness: None,
+                is_wifi: None,
             }),
         })
         .unwrap();
