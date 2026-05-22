@@ -513,10 +513,11 @@ impl StorageLayer {
             }
         }
 
-        // Extract RAPL data and delegate to pure calculation logic
+        // Extract RAPL data and CPU frequency ratio, then delegate to pure calculation logic
         // (automatically uses Approach B if RAPL available, falls back to Approach A otherwise)
         let rapl_package_watts = Self::extract_rapl_average(&pwr_records);
-        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms, rapl_package_watts);
+        let freq_ratio = Self::extract_freq_ratio_average(&pwr_records);
+        let mut stats = power_calc::compute_power_stats(app_metrics, window_ms, rapl_package_watts, freq_ratio);
 
         // Set on_battery field based on query filter (true if filtered to on-battery, false otherwise)
         for stat in &mut stats {
@@ -574,6 +575,29 @@ impl StorageLayer {
             Some(values.iter().sum::<f32>() / values.len() as f32)
         }
     }
+
+    fn extract_freq_ratio_average(pwr_records: &[MetricRecord]) -> Option<f32> {
+        let values: Vec<f32> = pwr_records
+            .iter()
+            .filter_map(|r| {
+                if let MetricPayload::Pwr(PowerData {
+                    avg_cpu_freq_ratio: Some(ratio),
+                    ..
+                }) = &r.payload
+                {
+                    Some(*ratio)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().sum::<f32>() / values.len() as f32)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -609,6 +633,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -624,6 +649,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -639,6 +665,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -674,6 +701,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -699,6 +727,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: Some(-100),
                 battery_voltage_uv: Some(12_000_000),
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -761,6 +790,7 @@ mod tests {
             rapl_core_watts: Some(10.2),
             battery_current_ua: Some(-500),
             battery_voltage_uv: Some(11_500_000),
+            avg_cpu_freq_ratio: None,
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -789,6 +819,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: Some(-1000),
                 battery_voltage_uv: Some(12_500_000),
+                avg_cpu_freq_ratio: None,
             }),
         };
 
@@ -852,6 +883,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -867,6 +899,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -927,6 +960,7 @@ mod tests {
                     rapl_core_watts: None,
                     battery_current_ua: None,
                     battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
                 }),
             },
             MetricRecord {
@@ -940,6 +974,7 @@ mod tests {
                     rapl_core_watts: None,
                     battery_current_ua: None,
                     battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
                 }),
             },
             MetricRecord {
@@ -953,6 +988,7 @@ mod tests {
                     rapl_core_watts: None,
                     battery_current_ua: None,
                     battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
                 }),
             },
         ];
@@ -1177,6 +1213,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();
@@ -1241,6 +1278,7 @@ mod tests {
                 rapl_core_watts: None,
                 battery_current_ua: None,
                 battery_voltage_uv: None,
+                avg_cpu_freq_ratio: None,
             }),
         })
         .unwrap();

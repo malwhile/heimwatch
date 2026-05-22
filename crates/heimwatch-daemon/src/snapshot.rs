@@ -888,6 +888,7 @@ mod tests {
             rapl_core_watts: None,
             battery_current_ua: None,
             battery_voltage_uv: None,
+            avg_cpu_freq_ratio: None,
         };
         print_system_power_summary(&pwr);
     }
@@ -902,6 +903,7 @@ mod tests {
             rapl_core_watts: None,
             battery_current_ua: None,
             battery_voltage_uv: None,
+            avg_cpu_freq_ratio: None,
         };
         print_system_power_summary(&pwr);
     }

@@ -16,6 +16,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
+pub const CPU_FREQ_LOCATION: &str = "/sys/devices/system/cpu/cpufreq";
 
 #[derive(Default)]
 struct BatteryState {
@@ -90,6 +91,11 @@ impl PowerCollector {
             (None, 0.0)
         };
 
+        // Read CPU frequency if available
+        let avg_cpu_freq_ratio = read_avg_cpu_freq_ratio(std::path::Path::new(
+            CPU_FREQ_LOCATION,
+        ));
+
         let record = MetricRecord {
             app_name: "system".to_string(),
             timestamp,
@@ -101,6 +107,7 @@ impl PowerCollector {
                 rapl_core_watts: None,
                 battery_current_ua: battery_state.current_ua,
                 battery_voltage_uv: battery_state.voltage_uv,
+                avg_cpu_freq_ratio,
             }),
         };
 
@@ -193,6 +200,52 @@ where
         .trim()
         .parse::<T>()
         .map_err(|e| anyhow::anyhow!("Failed to parse '{}': {}", path, e))
+}
+
+/// Read average CPU frequency ratio across all cpufreq policies.
+///
+/// Reads /sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq and cpuinfo_max_freq,
+/// computes cur/max ratio for each policy, and returns the average. Returns None if no
+/// policies are readable or if all max frequencies are zero.
+fn read_avg_cpu_freq_ratio(cpufreq_dir: &Path) -> Option<f32> {
+    let mut ratios = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(cpufreq_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let filename = path.file_name()?;
+
+            // Match policy directories (policy0, policy1, etc.)
+            if !filename
+                .to_string_lossy()
+                .starts_with("policy")
+            {
+                continue;
+            }
+
+            let cur_freq_path = path.join("scaling_cur_freq");
+            let max_freq_path = path.join("cpuinfo_max_freq");
+
+            // Try to read both frequency values. Guard against max_khz=0 to prevent division issues.
+            #[allow(clippy::collapsible_if)]
+            if let (Ok(cur_khz), Ok(max_khz)) = (
+                read_sysfs_value::<u32>(cur_freq_path.to_str()?),
+                read_sysfs_value::<u32>(max_freq_path.to_str()?),
+            ) {
+                if max_khz > 0 {
+                    let ratio = (cur_khz as f32 / max_khz as f32).clamp(0.0, 1.0);
+                    ratios.push(ratio);
+                }
+            }
+        }
+    }
+
+    if ratios.is_empty() {
+        None
+    } else {
+        let avg = ratios.iter().sum::<f32>() / ratios.len() as f32;
+        Some(avg)
+    }
 }
 
 /// Discover RAPL energy counter path.
@@ -483,5 +536,73 @@ mod tests {
         assert_eq!(state.current_ua, None);
         assert_eq!(state.voltage_uv, None);
         assert_eq!(state.status, None);
+    }
+
+    /// Helper to setup a mock cpufreq policy directory.
+    fn setup_mock_cpufreq_policy(
+        cpufreq_dir: &TempDir,
+        policy_name: &str,
+        cur_khz: u32,
+        max_khz: u32,
+    ) {
+        let policy_path = cpufreq_dir.path().join(policy_name);
+        fs::create_dir_all(&policy_path).unwrap();
+        let mut cur_file = fs::File::create(policy_path.join("scaling_cur_freq")).unwrap();
+        write!(cur_file, "{}", cur_khz).unwrap();
+        let mut max_file = fs::File::create(policy_path.join("cpuinfo_max_freq")).unwrap();
+        write!(max_file, "{}", max_khz).unwrap();
+    }
+
+    /// Test CPU frequency ratio with single policy at 50%.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_single_policy() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 2500000, 5000000);
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
+        assert!((ratio - 0.5).abs() < 0.01);
+    }
+
+    /// Test CPU frequency ratio with multiple policies at different ratios.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_multiple_policies() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 3000000, 5000000); // 0.6
+        setup_mock_cpufreq_policy(&tmpdir, "policy1", 2000000, 5000000); // 0.4
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
+        // Average of 0.6 and 0.4 = 0.5
+        assert!((ratio - 0.5).abs() < 0.01);
+    }
+
+    /// Test CPU frequency ratio with no policies.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_no_policies() {
+        let tmpdir = TempDir::new().unwrap();
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path());
+        assert!(ratio.is_none());
+    }
+
+    /// Test CPU frequency ratio guards against division by zero.
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_max_freq_zero() {
+        let tmpdir = TempDir::new().unwrap();
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 2500000, 0); // max_khz = 0
+
+        // Should skip this policy and return None (no valid policies)
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path());
+        assert!(ratio.is_none());
+    }
+
+    /// Test CPU frequency ratio with clamping to [0.0, 1.0] (shouldn't happen, but be safe).
+    #[test]
+    fn test_read_avg_cpu_freq_ratio_clamped() {
+        let tmpdir = TempDir::new().unwrap();
+        // Cur > max (shouldn't happen on real systems, but test the clamp)
+        setup_mock_cpufreq_policy(&tmpdir, "policy0", 6000000, 5000000); // 1.2 → clamped to 1.0
+
+        let ratio = read_avg_cpu_freq_ratio(tmpdir.path()).unwrap();
+        assert_eq!(ratio, 1.0);
     }
 }
