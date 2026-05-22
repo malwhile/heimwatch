@@ -510,12 +510,14 @@ mod tests {
         );
 
         // With RAPL, no freq_ratio: cpu_score = 10 * (50 / 50) = 10
-        let stats_rapl_no_freq = compute_power_stats(app_metrics.clone(), 1000, Some(10.0), None, None);
+        let stats_rapl_no_freq =
+            compute_power_stats(app_metrics.clone(), 1000, Some(10.0), None, None);
         let score_rapl_no_freq = stats_rapl_no_freq[0].power_score;
         assert!((score_rapl_no_freq - 10.0).abs() < 0.1);
 
         // With RAPL and freq_ratio=0.5, should give same result (freq_ratio ignored)
-        let stats_rapl_with_freq = compute_power_stats(app_metrics, 1000, Some(10.0), Some(0.5), None);
+        let stats_rapl_with_freq =
+            compute_power_stats(app_metrics, 1000, Some(10.0), Some(0.5), None);
         let score_rapl_with_freq = stats_rapl_with_freq[0].power_score;
         assert!((score_rapl_with_freq - 10.0).abs() < 0.1);
 
