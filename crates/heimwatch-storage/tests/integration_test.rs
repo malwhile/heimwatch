@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use common::*;
 use heimwatch_core::current_unix_timestamp;
-use heimwatch_storage::{CpuData, FocusData, MetricPayload, MetricType, StorageError};
+use heimwatch_storage::{CpuData, FocusData, MetricPayload, MetricType, RetentionConfig, StorageError};
 
 #[test]
 fn test_insert_and_read_back() {
@@ -320,4 +320,112 @@ fn test_get_top_apps_by_focus_limit() {
     assert_eq!(stats[1].total_duration_ms, 4000);
     assert_eq!(stats[2].app_name, "app2");
     assert_eq!(stats[2].total_duration_ms, 3000);
+}
+
+#[test]
+fn test_cleanup_with_config_per_type() {
+    let (db, _tmpdir) = create_test_db();
+    let now = current_unix_timestamp().unwrap();
+    let eight_days_ago = now - (8 * 86_400);
+    let three_days_ago = now - (3 * 86_400);
+
+    // Insert old CPU record (8 days old) and new network record (3 days old)
+    let old_cpu = make_cpu_record("app", eight_days_ago, 10_000_000);
+    let new_net = make_network_record("app", three_days_ago, 100, 200);
+
+    db.insert_metric(&old_cpu).unwrap();
+    db.insert_metric(&new_net).unwrap();
+
+    // Verify both are in the db
+    let cpu_before = db.get_metrics_by_type(MetricType::Cpu, 0, now).unwrap();
+    let net_before = db.get_metrics_by_type(MetricType::Net, 0, now).unwrap();
+    assert_eq!(cpu_before.len(), 1);
+    assert_eq!(net_before.len(), 1);
+
+    // Config: cpu retention 7 days, net retention 30 days
+    let mut config = RetentionConfig::default();
+    config.cpu_days = 7;
+    config.net_days = 30;
+
+    let report = db.cleanup_with_config(&config).unwrap();
+
+    // Only the old CPU record should be deleted
+    assert_eq!(report.deleted_count, 1);
+
+    // Verify CPU record is gone and net record remains
+    let cpu_after = db.get_metrics_by_type(MetricType::Cpu, 0, now).unwrap();
+    let net_after = db.get_metrics_by_type(MetricType::Net, 0, now).unwrap();
+    assert_eq!(cpu_after.len(), 0);
+    assert_eq!(net_after.len(), 1);
+}
+
+#[test]
+fn test_cleanup_with_config_net_longer_retention() {
+    let (db, _tmpdir) = create_test_db();
+    let now = current_unix_timestamp().unwrap();
+    let eight_days_ago = now - (8 * 86_400);
+
+    // Insert old records for both CPU and net (8 days old)
+    let old_cpu = make_cpu_record("app", eight_days_ago, 10_000_000);
+    let old_net = make_network_record("app", eight_days_ago, 100, 200);
+
+    db.insert_metric(&old_cpu).unwrap();
+    db.insert_metric(&old_net).unwrap();
+
+    // Config: cpu retention 7 days, net retention 30 days
+    let mut config = RetentionConfig::default();
+    config.cpu_days = 7;
+    config.net_days = 30;
+
+    let report = db.cleanup_with_config(&config).unwrap();
+
+    // Only the CPU record should be deleted
+    assert_eq!(report.deleted_count, 1);
+
+    let cpu_after = db.get_metrics_by_type(MetricType::Cpu, 0, now).unwrap();
+    let net_after = db.get_metrics_by_type(MetricType::Net, 0, now).unwrap();
+    assert_eq!(cpu_after.len(), 0);
+    assert_eq!(net_after.len(), 1);
+}
+
+#[test]
+fn test_cleanup_with_config_updates_last_cleanup_ts() {
+    let (db, _tmpdir) = create_test_db();
+
+    // Verify no cleanup timestamp initially
+    let ts_before = db.get_last_cleanup_ts().unwrap();
+    assert_eq!(ts_before, None);
+
+    // Run cleanup with config
+    let config = RetentionConfig::default();
+    db.cleanup_with_config(&config).unwrap();
+
+    // Verify timestamp is set
+    let ts_after = db.get_last_cleanup_ts().unwrap();
+    assert!(ts_after.is_some());
+    assert!(ts_after.unwrap() > 0);
+}
+
+#[test]
+fn test_get_storage_stats() {
+    let (db, _tmpdir) = create_test_db();
+
+    // Insert various records
+    let r1 = make_cpu_record("app1", 1000, 10_000_000);
+    let r2 = make_cpu_record("app2", 2000, 20_000_000);
+    let r3 = make_network_record("app3", 3000, 100, 200);
+
+    db.insert_metric(&r1).unwrap();
+    db.insert_metric(&r2).unwrap();
+    db.insert_metric(&r3).unwrap();
+
+    let stats = db.get_storage_stats().unwrap();
+
+    // Check totals
+    assert_eq!(stats.total_records, 3);
+    assert_eq!(stats.record_counts[&MetricType::Cpu], 2);
+    assert_eq!(stats.record_counts[&MetricType::Net], 1);
+
+    // DB size may vary in testing, just verify it doesn't error
+    let _ = stats.db_size_bytes;
 }

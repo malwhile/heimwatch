@@ -3,9 +3,6 @@
 //! Requires: CAP_BPF + CAP_PERFMON or root (Linux 5.8+)
 //! Uses: aya framework for eBPF program loading and tracepoint attachment
 
-/// Poll interval for CPU usage collection (5 seconds).
-pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
-
 use crate::error::CollectorError;
 use crate::util::{comm_to_string, run_collector_loop};
 use anyhow::Result;
@@ -20,6 +17,15 @@ use heimwatch_core::{
 };
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
+
+/// Poll interval for CPU usage collection (5 seconds).
+pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
+pub const COLLECTOR_NAME: &str = "CPU";
+pub const STATS_NAME: &str = "CPU_STATS";
+pub const IGNORED_PROCESSES: [&'static str; 1] = [
+    // Skip kernel idle tasks (swapper represents CPU idle time, not real work)
+    "swapper",
+];
 
 /// Local Pod-compatible mirror of PidCpuStats.
 ///
@@ -90,8 +96,8 @@ impl CpuCollector {
         // Get the CPU_STATS map from the BPF program and iterate it
         let map_ref = self
             .bpf
-            .map_mut("CPU_STATS")
-            .ok_or_else(|| CollectorError::MapNotFound("CPU_STATS".to_string()))?;
+            .map_mut(STATS_NAME)
+            .ok_or_else(|| CollectorError::MapNotFound(STATS_NAME.to_string()))?;
 
         // Map is now keyed by process name ([u8; 16]), not PID
         let stats_map: AyaHashMap<_, [u8; 16], LocalPidCpuStats> = AyaHashMap::try_from(map_ref)?;
@@ -106,9 +112,10 @@ impl CpuCollector {
             // Convert process name to string (null-terminated)
             let app_name = comm_to_string(&comm).unwrap_or_else(|| "(unknown)".to_string());
 
-            // Skip kernel idle tasks (swapper represents CPU idle time, not real work)
-            if app_name.starts_with("swapper") {
-                continue;
+            for ignored_process_name in IGNORED_PROCESSES {
+                if app_name.starts_with(ignored_process_name) {
+                    continue;
+                }
             }
 
             let current_ns = local_stats.cpu_time_ns;
@@ -157,7 +164,7 @@ impl CpuCollector {
             shutdown,
             |c| c.collect_cpu(POLL_INTERVAL),
             |p| matches!(p, MetricPayload::Cpu(_)),
-            "CPU",
+            COLLECTOR_NAME,
         )
         .await
     }

@@ -7,7 +7,9 @@ pub mod db;
 mod error;
 mod keys;
 mod power_calc;
+pub mod retention;
 
 pub use db::StorageLayer;
 pub use error::StorageError;
 pub use heimwatch_core::metrics::*;
+pub use retention::{CleanupReport, RetentionConfig, StorageStats};

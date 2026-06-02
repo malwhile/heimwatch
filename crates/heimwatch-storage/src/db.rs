@@ -11,6 +11,7 @@
 use crate::error::StorageError;
 use crate::keys;
 use crate::power_calc;
+use crate::retention::{CleanupReport, RetentionConfig, StorageStats};
 use anyhow::{Context, Result};
 use heimwatch_core::{
     AppFocusStats, AppNetworkStats, AppPowerStats, CpuData, DiskData, FocusData, GpuProcessData,
@@ -19,6 +20,9 @@ use heimwatch_core::{
 };
 use sled::Db;
 use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 const META_LAST_CLEANUP: &[u8; 17] = b"meta:last_cleanup";
 const CONFIG_RETENTION_DAYS: &[u8; 21] = b"config:retention_days";
@@ -264,6 +268,123 @@ impl StorageLayer {
     pub fn get_last_cleanup_ts(&self) -> Result<Option<u64>> {
         let tree = self.meta_tree()?;
         self.get_metadata(&tree, META_LAST_CLEANUP, None)
+    }
+
+    /// Perform cleanup with per-metric-type retention configuration.
+    ///
+    /// Deletes records older than the retention period for each metric type.
+    /// If `export_before_delete` is enabled, exports records before deletion.
+    /// Returns a report with deletion counts and optional export path.
+    pub fn cleanup_with_config(&self, config: &RetentionConfig) -> Result<CleanupReport> {
+        let now = current_unix_timestamp()?;
+        let tree = self.metrics_tree()?;
+
+        let mut total_deleted = 0u64;
+        let mut total_exported = 0u64;
+        let mut export_path = None;
+
+        // Export before deleting if configured.
+        if config.export_before_delete && let Some(dir) = &config.export_dir {
+            fs::create_dir_all(dir)?;
+            let timestamp = now;
+            let export_filename = format!("export-{}.jsonl", timestamp);
+            let export_file_path = Path::new(dir).join(&export_filename);
+
+            total_exported = self.export_metrics_to_jsonl(&export_file_path, config, now)?;
+            export_path = Some(export_file_path);
+        }
+
+        // Delete per-metric-type retention.
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let retention_days = config.retention_days_for(*metric_type);
+            let retention_seconds = retention_days as u64 * 86_400;
+            let cutoff = now.saturating_sub(retention_seconds);
+
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
+
+            let mut keys_to_delete = Vec::new();
+            for item in tree.range(range_start..=range_end) {
+                let (key, _) = item?;
+                keys_to_delete.push(key.to_vec());
+            }
+
+            let count = keys_to_delete.len() as u64;
+            if count > 0 {
+                let mut batch = sled::Batch::default();
+                for key in keys_to_delete {
+                    batch.remove(key);
+                }
+                tree.apply_batch(batch)?;
+                total_deleted += count;
+            }
+        }
+
+        self.set_last_cleanup_ts(now)?;
+
+        Ok(CleanupReport {
+            deleted_count: total_deleted,
+            exported_count: total_exported,
+            export_path,
+        })
+    }
+
+    /// Get current storage statistics.
+    pub fn get_storage_stats(&self) -> Result<StorageStats> {
+        let tree = self.metrics_tree()?;
+        let db_size_bytes = self.db.size_on_disk()?;
+
+        let mut record_counts: HashMap<MetricType, u64> = HashMap::new();
+        let mut total_records = 0u64;
+
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, u64::MAX);
+
+            let mut count = 0u64;
+            for _ in tree.range(range_start..=range_end) {
+                count += 1;
+            }
+            record_counts.insert(*metric_type, count);
+            total_records += count;
+        }
+
+        Ok(StorageStats {
+            db_size_bytes,
+            record_counts,
+            total_records,
+        })
+    }
+
+    /// Export metrics to a JSONL file before deletion.
+    fn export_metrics_to_jsonl(
+        &self,
+        path: &Path,
+        config: &RetentionConfig,
+        now: u64,
+    ) -> Result<u64> {
+        let mut file = fs::File::create(path)?;
+        let tree = self.metrics_tree()?;
+        let mut count = 0u64;
+
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let retention_days = config.retention_days_for(*metric_type);
+            let retention_seconds = retention_days as u64 * 86_400;
+            let cutoff = now.saturating_sub(retention_seconds);
+
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
+
+            for item in tree.range(range_start..=range_end) {
+                let (_key, value) = item?;
+                let record: MetricRecord = serde_json::from_slice(&value)?;
+                let line = serde_json::to_string(&record)?;
+                writeln!(file, "{}", line)?;
+                count += 1;
+            }
+        }
+
+        Ok(count)
     }
 
     /// Manually flush the database transactions to disk
