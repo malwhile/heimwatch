@@ -159,11 +159,12 @@ pub fn compute_power_stats(
                 }
             };
 
-            let net_score = net_normalized * match is_wifi {
-                Some(true) => NET_WIFI_WEIGHT,  // WiFi: higher power (radio transceiver active)
-                Some(false) => NET_ETH_WEIGHT, // Ethernet: lower power (passive copper connection)
-                None => NET_DEF_WEIGHT,        // Unknown: use baseline (no regression)
-            };
+            let net_score = net_normalized
+                * match is_wifi {
+                    Some(true) => NET_WIFI_WEIGHT, // WiFi: higher power (radio transceiver active)
+                    Some(false) => NET_ETH_WEIGHT, // Ethernet: lower power (passive copper connection)
+                    None => NET_DEF_WEIGHT,        // Unknown: use baseline (no regression)
+                };
 
             let components = ScoreComponents {
                 cpu: cpu_score,

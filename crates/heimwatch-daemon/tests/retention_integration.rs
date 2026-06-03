@@ -59,7 +59,16 @@ fn test_retention_config_retention_days_for() {
     config.cpu_days = 10;
     config.net_days = 20;
 
-    assert_eq!(config.retention_days_for(heimwatch_core::MetricType::Cpu), 10);
-    assert_eq!(config.retention_days_for(heimwatch_core::MetricType::Net), 20);
-    assert_eq!(config.retention_days_for(heimwatch_core::MetricType::Pwr), 7); // default
+    assert_eq!(
+        config.retention_days_for(heimwatch_core::MetricType::Cpu),
+        10
+    );
+    assert_eq!(
+        config.retention_days_for(heimwatch_core::MetricType::Net),
+        20
+    );
+    assert_eq!(
+        config.retention_days_for(heimwatch_core::MetricType::Pwr),
+        7
+    ); // default
 }

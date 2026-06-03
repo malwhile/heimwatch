@@ -4,18 +4,10 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct DaemonConfig {
     #[serde(default)]
     pub retention: RetentionConfig,
-}
-
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            retention: RetentionConfig::default(),
-        }
-    }
 }
 
 impl DaemonConfig {
@@ -29,7 +21,11 @@ impl DaemonConfig {
         match Self::load(path) {
             Ok(config) => config,
             Err(e) => {
-                log::warn!("Failed to load config from {:?}: {}; using defaults", path, e);
+                log::warn!(
+                    "Failed to load config from {:?}: {}; using defaults",
+                    path,
+                    e
+                );
                 Self::default()
             }
         }

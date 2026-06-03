@@ -33,7 +33,11 @@ use tokio::sync::{mpsc, watch};
 /// - `PlatformCollector::new()` fails (e.g., missing BPF capabilities)
 /// - Storage layer fails to initialize or persist records
 pub async fn run(db_path: &str, config_path: Option<&str>) -> Result<()> {
-    log::debug!("Initializing daemon loop (db: {}, config: {:?})", db_path, config_path);
+    log::debug!(
+        "Initializing daemon loop (db: {}, config: {:?})",
+        db_path,
+        config_path
+    );
 
     // Load configuration
     let config = if let Some(path) = config_path {
@@ -154,12 +158,14 @@ pub async fn run(db_path: &str, config_path: Option<&str>) -> Result<()> {
                 Ok(report) => {
                     log::info!(
                         "Cleanup: deleted={}, exported={}",
-                        report.deleted_count, report.exported_count
+                        report.deleted_count,
+                        report.exported_count
                     );
                     if let Ok(stats) = storage_cleanup.get_storage_stats() {
                         log::info!(
                             "Storage: {} bytes, {} total records",
-                            stats.db_size_bytes, stats.total_records
+                            stats.db_size_bytes,
+                            stats.total_records
                         );
                     }
                 }

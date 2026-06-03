@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use common::*;
 use heimwatch_core::current_unix_timestamp;
-use heimwatch_storage::{CpuData, FocusData, MetricPayload, MetricType, RetentionConfig, StorageError};
+use heimwatch_storage::{
+    CpuData, FocusData, MetricPayload, MetricType, RetentionConfig, StorageError,
+};
 
 #[test]
 fn test_insert_and_read_back() {
@@ -459,7 +461,10 @@ fn test_export_before_delete_with_file_io() {
 
     // Verify export occurred
     assert_eq!(report.deleted_count, 2, "Should delete 2 old records");
-    assert_eq!(report.exported_count, 2, "Should export 2 records before deletion");
+    assert_eq!(
+        report.exported_count, 2,
+        "Should export 2 records before deletion"
+    );
     assert!(report.export_path.is_some(), "Should have export path");
 
     // Verify export file exists and contains valid JSONL
@@ -477,10 +482,20 @@ fn test_export_before_delete_with_file_io() {
 
     // Verify each line is valid JSON and has expected structure
     for line in lines {
-        let parsed: serde_json::Value = serde_json::from_str(line).expect("Line should be valid JSON");
-        assert!(parsed.get("app_name").is_some(), "Record should have app_name");
-        assert!(parsed.get("timestamp").is_some(), "Record should have timestamp");
-        assert!(parsed.get("payload").is_some(), "Record should have payload");
+        let parsed: serde_json::Value =
+            serde_json::from_str(line).expect("Line should be valid JSON");
+        assert!(
+            parsed.get("app_name").is_some(),
+            "Record should have app_name"
+        );
+        assert!(
+            parsed.get("timestamp").is_some(),
+            "Record should have timestamp"
+        );
+        assert!(
+            parsed.get("payload").is_some(),
+            "Record should have payload"
+        );
     }
 
     // Verify old records are deleted and recent record remains
@@ -528,7 +543,7 @@ fn test_export_filename_uniqueness_multiple_cleanups() {
     let export_files: Vec<_> = std::fs::read_dir(&export_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
         .collect();
 
     assert_eq!(
@@ -546,7 +561,10 @@ fn test_export_filename_uniqueness_multiple_cleanups() {
             filename_str.starts_with("export-"),
             "Filename should start with 'export-'"
         );
-        assert!(filename_str.ends_with(".jsonl"), "Filename should end with '.jsonl'");
+        assert!(
+            filename_str.ends_with(".jsonl"),
+            "Filename should end with '.jsonl'"
+        );
 
         // Extract the number part and verify it's a large nanosecond value
         let parts: Vec<&str> = filename_str.split('-').collect();
@@ -556,7 +574,10 @@ fn test_export_filename_uniqueness_multiple_cleanups() {
             .parse()
             .expect("Should be able to parse nanos as number");
         // Nanosecond timestamps are very large (19 digits typically)
-        assert!(nanos > 1_000_000_000_000_000_000, "Should be nanosecond precision");
+        assert!(
+            nanos > 1_000_000_000_000_000_000,
+            "Should be nanosecond precision"
+        );
     }
 }
 
@@ -599,7 +620,8 @@ fn test_large_cleanup_operation() {
     // Insert 1000 records across all metric types that are old and will be deleted
     let mut records = Vec::new();
     for i in 0..1000 {
-        let metric_type = heimwatch_core::ALL_METRIC_TYPES[i % heimwatch_core::ALL_METRIC_TYPES.len()];
+        let metric_type =
+            heimwatch_core::ALL_METRIC_TYPES[i % heimwatch_core::ALL_METRIC_TYPES.len()];
         let record = match metric_type {
             MetricType::Cpu => make_cpu_record(&format!("app{}", i), eight_days_ago, 10_000_000),
             MetricType::Net => make_network_record(&format!("app{}", i), eight_days_ago, 100, 200),
@@ -623,11 +645,17 @@ fn test_large_cleanup_operation() {
     let report = db.cleanup_with_config(&config).unwrap();
 
     // Verify cleanup succeeded without panicking or OOM
-    assert_eq!(report.deleted_count, 1000, "Should delete all 1000 old records");
+    assert_eq!(
+        report.deleted_count, 1000,
+        "Should delete all 1000 old records"
+    );
 
     // Verify database is now empty
     let stats_after = db.get_storage_stats().unwrap();
-    assert_eq!(stats_after.total_records, 0, "Database should be empty after cleanup");
+    assert_eq!(
+        stats_after.total_records, 0,
+        "Database should be empty after cleanup"
+    );
 }
 
 #[test]

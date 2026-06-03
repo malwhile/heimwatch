@@ -288,7 +288,9 @@ impl StorageLayer {
         let mut export_path = None;
 
         // Export before deleting if configured.
-        if config.export_before_delete && let Some(dir) = &config.export_dir {
+        if config.export_before_delete
+            && let Some(dir) = &config.export_dir
+        {
             fs::create_dir_all(dir)?;
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

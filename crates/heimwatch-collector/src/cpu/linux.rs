@@ -22,7 +22,7 @@ use tokio::sync::{mpsc, watch};
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 pub const COLLECTOR_NAME: &str = "CPU";
 pub const STATS_NAME: &str = "CPU_STATS";
-pub const IGNORED_PROCESSES: [&'static str; 1] = [
+pub const IGNORED_PROCESSES: [&str; 1] = [
     // Skip kernel idle tasks (swapper represents CPU idle time, not real work)
     "swapper",
 ];
