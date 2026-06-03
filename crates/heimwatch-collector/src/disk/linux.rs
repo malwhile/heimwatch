@@ -19,6 +19,8 @@ use tokio::sync::{mpsc, watch};
 
 /// Poll interval for disk I/O collection (5 seconds).
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
+pub const COLLECTOR_NAME: &str = "Disk";
+pub const STATS_NAME: &str = "DISK_STATS";
 
 /// Local Pod-compatible mirror of PidDiskStats.
 ///
@@ -73,8 +75,8 @@ impl DiskCollector {
 
         let map_ref = self
             .bpf
-            .map_mut("DISK_STATS")
-            .ok_or_else(|| CollectorError::MapNotFound("DISK_STATS".to_string()))?;
+            .map_mut(STATS_NAME)
+            .ok_or_else(|| CollectorError::MapNotFound(STATS_NAME.to_string()))?;
 
         // Map is now keyed by process name ([u8; 16]), not PID
         let stats_map: AyaHashMap<_, [u8; 16], LocalPidDiskStats> = AyaHashMap::try_from(map_ref)?;
@@ -140,7 +142,7 @@ impl DiskCollector {
             shutdown,
             |c| c.collect_disk(POLL_INTERVAL),
             |p| matches!(p, MetricPayload::Dsk(_)),
-            "Disk",
+            COLLECTOR_NAME,
         )
         .await
     }

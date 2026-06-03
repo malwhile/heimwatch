@@ -1,0 +1,24 @@
+# Heimwatch Configuration File
+# Copy this to heimwatch.toml and customize for your system
+
+[retention]
+# Data retention periods in days for each metric type (default: 7 days)
+cpu_days = 7
+net_days = 7
+pwr_days = 7
+foc_days = 7
+mem_days = 7
+dsk_days = 7
+gpu_days = 7
+gpu_proc_days = 7
+
+# Cleanup interval in hours (default: 24)
+# The daemon will automatically delete expired records at this interval
+cleanup_interval_hours = 24
+
+# Export records before deletion (default: false)
+# If enabled, old records are exported to JSONL before deletion
+export_before_delete = false
+
+# Export directory path (only used if export_before_delete = true)
+# export_dir = "./heimwatch-exports"

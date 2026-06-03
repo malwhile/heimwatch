@@ -10,6 +10,8 @@
 //!
 //! Or run with `sudo`.
 
+use std::fs;
+
 use clap::{Parser, Subcommand};
 use heimwatch_daemon::logging::{LogConfig, init_logging, parse_level};
 use heimwatch_daemon::{run, snapshot};
@@ -33,6 +35,10 @@ enum Command {
         /// Database path (sled)
         #[arg(short, long, default_value = "./heimwatch.db")]
         db: String,
+
+        /// Configuration file path (TOML)
+        #[arg(short, long, default_value = "./heimwatch.toml")]
+        config: String,
     },
     /// Capture a snapshot and print to stdout
     #[command(subcommand)]
@@ -135,9 +141,18 @@ async fn main() -> anyhow::Result<()> {
     init_logging(log_config)?;
 
     match args.command {
-        Command::Daemon { db } => {
-            log::info!("Heimwatch daemon starting with db={}", db);
-            run(&db).await?;
+        Command::Daemon { db, config } => {
+            log::info!(
+                "Heimwatch daemon starting with db={}, config={}, config status={}",
+                db,
+                config,
+                if fs::exists(&config).is_ok() {
+                    "loaded from file"
+                } else {
+                    "file not found, loading defaults"
+                }
+            );
+            run(&db, Some(&config)).await?;
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
             SnapshotCommand::Cpu { window, format } => {

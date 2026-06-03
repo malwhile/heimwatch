@@ -1,17 +1,24 @@
 //! Heimwatch daemon: event-driven architecture with unified collector interface.
 
+pub mod config;
 pub mod logging;
 pub mod snapshot;
 pub mod table;
 
 use anyhow::Result;
+use config::DaemonConfig;
 use heimwatch_collector::PlatformCollector;
 use heimwatch_core::CollectorEvent;
 use heimwatch_storage::StorageLayer;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
-/// Run the heimwatch daemon with the specified database path.
+/// Run the heimwatch daemon with the specified database path and optional config file.
+///
+/// If config_path is provided and file exists, loads retention and cleanup config from TOML.
+/// Otherwise uses default settings.
 ///
 /// # Architecture
 /// - Collectors send `CollectorEvent`s through a shared mpsc channel
@@ -19,13 +26,25 @@ use tokio::sync::{mpsc, watch};
 /// - Shutdown is broadcast via `watch::channel` to all collectors
 /// - All collectors run as async tasks with event-driven coordination via tokio::select!
 /// - Each collector defines its own polling interval via POLL_INTERVAL constant
+/// - A background cleanup task periodically removes old data based on retention config
 ///
 /// # Errors
 /// Returns an error if:
 /// - `PlatformCollector::new()` fails (e.g., missing BPF capabilities)
 /// - Storage layer fails to initialize or persist records
-pub async fn run(db_path: &str) -> Result<()> {
-    log::debug!("Initializing daemon loop (db: {})", db_path);
+pub async fn run(db_path: &str, config_path: Option<&str>) -> Result<()> {
+    log::debug!(
+        "Initializing daemon loop (db: {}, config: {:?})",
+        db_path,
+        config_path
+    );
+
+    // Load configuration
+    let config = if let Some(path) = config_path {
+        DaemonConfig::load_or_default(Path::new(path))
+    } else {
+        DaemonConfig::default()
+    };
 
     // Initialize storage layer
     let storage = Arc::new(StorageLayer::open(db_path)?);
@@ -34,7 +53,7 @@ pub async fn run(db_path: &str) -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::channel::<CollectorEvent>(256);
 
     // Create the shutdown broadcast
-    let (shutdown_tx, _) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Initialize collectors
     let mut collector = PlatformCollector::new()?;
@@ -123,6 +142,39 @@ pub async fn run(db_path: &str) -> Result<()> {
     } else {
         log::debug!("Power tracking unavailable on this platform");
     }
+
+    // Spawn cleanup task
+    let storage_cleanup = Arc::clone(&storage);
+    let cleanup_config = config.retention.clone();
+    let cleanup_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let interval = Duration::from_secs(cleanup_config.cleanup_interval_hours * 3600);
+        loop {
+            tokio::time::sleep(interval).await;
+            if *cleanup_shutdown.borrow() {
+                break;
+            }
+            match storage_cleanup.cleanup_with_config(&cleanup_config) {
+                Ok(report) => {
+                    log::info!(
+                        "Cleanup: deleted={}, exported={}",
+                        report.deleted_count,
+                        report.exported_count
+                    );
+                    if let Ok(stats) = storage_cleanup.get_storage_stats() {
+                        log::info!(
+                            "Storage: {} bytes, {} total records",
+                            stats.db_size_bytes,
+                            stats.total_records
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::error!("Cleanup failed: {}", e);
+                }
+            }
+        }
+    });
 
     // Drop the original event_tx so the channel closes when all collectors exit
     drop(event_tx);

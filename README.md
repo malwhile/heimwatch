@@ -19,16 +19,26 @@ To provide a privacy-focused, low-overhead alternative to cloud-based screen tim
 - **🔔 Smart Alerting**: Configurable alerts for usage thresholds (e.g., "Notify me if Chrome uses >50% CPU for 10 mins").
 - **🌍 Cross-Platform**: Designed with a modular architecture to support Linux (Wayland), macOS, Windows, and BSD.
 
+## 📚 Documentation
+
+**User Documentation** is available in the [`docs/`](docs/) folder:
+- [Data Retention & Cleanup](docs/RETENTION.md) — Configure automatic data retention policies, set cleanup intervals, and manage storage growth.
+- Example configuration files and deployment guides (coming soon)
+
+**Developer Documentation** is in the root:
+- [CLAUDE.md](CLAUDE.md) — Architecture decisions, eBPF CO-RE implementation, and development setup for Claude Code
+- This README provides a high-level overview
+
 ## 🏗️ Architecture
 
 Heimwatch is built as a modular Rust workspace:
 
 - **`heimwatch-core`**: Shared types, traits, and OS abstraction layers.
 - **`heimwatch-collector`**: OS-specific data collection (Network, Power, Focus, etc.).
-- **`heimwatch-storage`**: Time-series data persistence using `sled`.
+- **`heimwatch-storage`**: Time-series data persistence using `sled`, with automatic data retention and cleanup.
 - **`heimwatch-web`**: Lightweight Axum server serving the dashboard.
 - **`heimwatch-tui`**: Ratatui-based terminal interface.
-- **`heimwatch-daemon`**: Service management (systemd, launchd, etc.).
+- **`heimwatch-daemon`**: Daemon orchestration, event collection, and scheduled cleanup tasks.
 
 ## 📋 System Requirements
 
@@ -81,24 +91,33 @@ After building, grant the necessary capabilities or run as root:
 # Option 1: Grant minimal capabilities (preferred)
 sudo setcap cap_bpf,cap_perfmon+ep ./target/release/heimwatch
 
-# Then run without sudo
-./target/release/heimwatch
+# Then run the daemon (with optional config file)
+./target/release/heimwatch daemon --db ./heimwatch.db --config ./heimwatch.toml
 
 # Option 2: Run with sudo
-sudo ./target/release/heimwatch
+sudo ./target/release/heimwatch daemon --db ./heimwatch.db
 ```
+
+**Configuration**: Copy and customize the example configuration:
+```bash
+cp docs/heimwatch.toml.example heimwatch.toml
+# Edit heimwatch.toml to adjust retention policies, cleanup intervals, etc.
+```
+
+See [Data Retention & Cleanup](docs/RETENTION.md) for configuration options.
 
 ## 🚀 Roadmap
 
-- [ ] **Phase 1**: Project scaffolding, CI/CD, and architecture design.
-- [ ] **Phase 2**: Linux/Wayland data collection implementation.
-- [ ] **Phase 3**: Sled storage layer and data retention.
-- [ ] **Phase 4**: Web dashboard and real-time updates.
-- [ ] **Phase 5**: TUI implementation.
-- [ ] **Phase 6**: Daemon service management.
-- [ ] **Phase 7**: Alerting system.
+- [x] **Phase 1**: Project scaffolding, CI/CD, and architecture design.
+- [x] **Phase 2**: Linux/Wayland data collection implementation (CPU, Network, Power, Focus, Memory, Disk, GPU).
+- [x] **Phase 3**: Sled storage layer, CO-RE-based eBPF probes, and automatic data retention with configurable per-metric-type cleanup policies.
+- [ ] **Phase 4**: Web dashboard and real-time updates (Axum + HTMX + Chart.js).
+- [ ] **Phase 5**: TUI implementation (Ratatui).
+- [ ] **Phase 6**: Daemon service management (systemd, launchd).
+- [ ] **Phase 7**: Alerting system (configurable usage thresholds).
 - [ ] **Phase 8**: Cross-platform expansion (macOS, Windows, BSD).
-- [ ] **Phase 9**: Documentation, licensing, and v1.0 release.
+- [ ] **Phase 9**: Data aggregation (hourly/daily buckets) and optimized long-term storage.
+- [ ] **Phase 10**: Documentation, licensing, and v1.0 release.
 
 ## 📜 License
 

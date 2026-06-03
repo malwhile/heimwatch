@@ -7,6 +7,15 @@
 use heimwatch_core::AppPowerStats;
 use std::collections::HashMap;
 
+pub const CPU_WEIGHT: f32 = 0.40;
+pub const GPU_WEIGHT: f32 = 0.20;
+pub const DISPLAY_WEIGHT: f32 = 0.15;
+pub const DISK_WEIGHT: f32 = 0.10;
+pub const NET_WIFI_WEIGHT: f32 = 0.15;
+pub const NET_ETH_WEIGHT: f32 = 0.05;
+pub const NET_DEF_WEIGHT: f32 = 0.10;
+pub const MEM_WEIGHT: f32 = 0.05;
+
 /// Aggregated metrics for a single app across a time range.
 #[derive(Default, Clone)]
 pub struct AppMetrics {
@@ -142,27 +151,28 @@ pub fn compute_power_stats(
                 }
                 (None, Some(ratio)) => {
                     // Approach A+: fixed-weight CPU scaled by (frequency_ratio)²
-                    0.40 * cpu_pct_avg * ratio * ratio
+                    CPU_WEIGHT * cpu_pct_avg * ratio * ratio
                 }
                 _ => {
                     // Approach A: fixed-weight CPU (fallback when RAPL and freq_ratio unavailable)
-                    0.40 * cpu_pct_avg
+                    CPU_WEIGHT * cpu_pct_avg
                 }
             };
 
-            let net_weight = match is_wifi {
-                Some(true) => 0.15,  // WiFi: higher power (radio transceiver active)
-                Some(false) => 0.05, // Ethernet: lower power (passive copper connection)
-                None => 0.10,        // Unknown: use baseline (no regression)
-            };
+            let net_score = net_normalized
+                * match is_wifi {
+                    Some(true) => NET_WIFI_WEIGHT, // WiFi: higher power (radio transceiver active)
+                    Some(false) => NET_ETH_WEIGHT, // Ethernet: lower power (passive copper connection)
+                    None => NET_DEF_WEIGHT,        // Unknown: use baseline (no regression)
+                };
 
             let components = ScoreComponents {
                 cpu: cpu_score,
-                gpu: 0.20 * gpu_pct_max,
-                display: 0.15 * focus_fraction * display_brightness.unwrap_or(1.0),
-                disk: 0.10 * disk_normalized,
-                net: net_weight * net_normalized,
-                mem: 0.05 * mem_fraction,
+                gpu: GPU_WEIGHT * gpu_pct_max,
+                display: DISPLAY_WEIGHT * focus_fraction * display_brightness.unwrap_or(1.0),
+                disk: DISK_WEIGHT * disk_normalized,
+                net: net_score,
+                mem: MEM_WEIGHT * mem_fraction,
             };
 
             let power_score = components.cpu
