@@ -71,6 +71,12 @@ impl StorageLayer {
         }
     }
 
+    /// Calculate the cutoff timestamp for a given retention period.
+    fn retention_cutoff(retention_days: u32, now: u64) -> u64 {
+        let retention_seconds = retention_days as u64 * 86_400;
+        now.saturating_sub(retention_seconds)
+    }
+
     /// Insert a single metric record.
     pub fn insert_metric(&self, record: &MetricRecord) -> Result<()> {
         let tree = self.metrics_tree()?;
@@ -210,9 +216,7 @@ impl StorageLayer {
     /// Delete records older than the retention period, returning the count deleted.
     pub fn cleanup_old_data(&self, retention_days: u32) -> Result<u64> {
         let now = current_unix_timestamp()?;
-
-        let retention_seconds = retention_days as u64 * 86_400;
-        let cutoff = now.saturating_sub(retention_seconds);
+        let cutoff = Self::retention_cutoff(retention_days, now);
 
         let tree = self.metrics_tree()?;
 
@@ -286,8 +290,12 @@ impl StorageLayer {
         // Export before deleting if configured.
         if config.export_before_delete && let Some(dir) = &config.export_dir {
             fs::create_dir_all(dir)?;
-            let timestamp = now;
-            let export_filename = format!("export-{}.jsonl", timestamp);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_nanos())
+                .unwrap_or(now as u128);
+            let export_filename = format!("export-{}.jsonl", nanos);
             let export_file_path = Path::new(dir).join(&export_filename);
 
             total_exported = self.export_metrics_to_jsonl(&export_file_path, config, now)?;
@@ -297,8 +305,7 @@ impl StorageLayer {
         // Delete per-metric-type retention.
         for metric_type in heimwatch_core::ALL_METRIC_TYPES {
             let retention_days = config.retention_days_for(*metric_type);
-            let retention_seconds = retention_days as u64 * 86_400;
-            let cutoff = now.saturating_sub(retention_seconds);
+            let cutoff = Self::retention_cutoff(retention_days, now);
 
             let range_start = keys::range_start(metric_type, 0);
             let range_end = keys::range_end(metric_type, cutoff);
@@ -369,8 +376,7 @@ impl StorageLayer {
 
         for metric_type in heimwatch_core::ALL_METRIC_TYPES {
             let retention_days = config.retention_days_for(*metric_type);
-            let retention_seconds = retention_days as u64 * 86_400;
-            let cutoff = now.saturating_sub(retention_seconds);
+            let cutoff = Self::retention_cutoff(retention_days, now);
 
             let range_start = keys::range_start(metric_type, 0);
             let range_end = keys::range_end(metric_type, cutoff);

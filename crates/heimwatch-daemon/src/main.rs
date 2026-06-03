@@ -10,6 +10,8 @@
 //!
 //! Or run with `sudo`.
 
+use std::fs;
+
 use clap::{Parser, Subcommand};
 use heimwatch_daemon::logging::{LogConfig, init_logging, parse_level};
 use heimwatch_daemon::{run, snapshot};
@@ -140,7 +142,14 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::Daemon { db, config } => {
-            log::info!("Heimwatch daemon starting with db={}, config={}", db, config);
+            log::info!("Heimwatch daemon starting with db={}, config={}, config status={}", 
+                db, 
+                config, 
+                if fs::exists(&config).is_ok() {
+                    "loaded from file"
+                } else {
+                    "file not found, loading defaults"
+                });
             run(&db, Some(&config)).await?;
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
