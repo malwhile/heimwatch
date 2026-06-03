@@ -55,9 +55,11 @@ export_dir = "./exports"
 
 #[test]
 fn test_retention_config_retention_days_for() {
-    let mut config = RetentionConfig::default();
-    config.cpu_days = 10;
-    config.net_days = 20;
+    let config = RetentionConfig {
+        cpu_days: 10,
+        net_days: 20,
+        ..Default::default()
+    };
 
     assert_eq!(
         config.retention_days_for(heimwatch_core::MetricType::Cpu),
