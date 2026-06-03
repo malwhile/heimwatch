@@ -345,9 +345,11 @@ fn test_cleanup_with_config_per_type() {
     assert_eq!(net_before.len(), 1);
 
     // Config: cpu retention 7 days, net retention 30 days
-    let mut config = RetentionConfig::default();
-    config.cpu_days = 7;
-    config.net_days = 30;
+    let config = RetentionConfig {
+        cpu_days: 7,
+        net_days: 30,
+        ..Default::default()
+    };
 
     let report = db.cleanup_with_config(&config).unwrap();
 
@@ -375,9 +377,11 @@ fn test_cleanup_with_config_net_longer_retention() {
     db.insert_metric(&old_net).unwrap();
 
     // Config: cpu retention 7 days, net retention 30 days
-    let mut config = RetentionConfig::default();
-    config.cpu_days = 7;
-    config.net_days = 30;
+    let config = RetentionConfig {
+        cpu_days: 7,
+        net_days: 30,
+        ..Default::default()
+    };
 
     let report = db.cleanup_with_config(&config).unwrap();
 
@@ -450,11 +454,13 @@ fn test_export_before_delete_with_file_io() {
 
     // Configure export before delete
     let export_dir = tmpdir.path().join("exports");
-    let mut config = RetentionConfig::default();
-    config.cpu_days = 7;
-    config.net_days = 7;
-    config.export_before_delete = true;
-    config.export_dir = Some(export_dir.to_string_lossy().to_string());
+    let config = RetentionConfig {
+        cpu_days: 7,
+        net_days: 7,
+        export_before_delete: true,
+        export_dir: Some(export_dir.to_string_lossy().to_string()),
+        ..Default::default()
+    };
 
     // Run cleanup
     let report = db.cleanup_with_config(&config).unwrap();
@@ -516,10 +522,12 @@ fn test_export_filename_uniqueness_multiple_cleanups() {
     let eight_days_ago = now - (8 * 86_400);
 
     let export_dir = tmpdir.path().join("exports");
-    let mut config = RetentionConfig::default();
-    config.cpu_days = 7;
-    config.export_before_delete = true;
-    config.export_dir = Some(export_dir.to_string_lossy().to_string());
+    let config = RetentionConfig {
+        cpu_days: 7,
+        export_before_delete: true,
+        export_dir: Some(export_dir.to_string_lossy().to_string()),
+        ..Default::default()
+    };
 
     // Run cleanup multiple times
     for i in 0..3 {
@@ -592,9 +600,11 @@ fn test_cleanup_with_nonexistent_export_dir() {
 
     // Configure export to a directory that doesn't exist (but parent does)
     let export_dir = tmpdir.path().join("nonexistent/exports");
-    let mut config = RetentionConfig::default();
-    config.export_before_delete = true;
-    config.export_dir = Some(export_dir.to_string_lossy().to_string());
+    let config = RetentionConfig {
+        export_before_delete: true,
+        export_dir: Some(export_dir.to_string_lossy().to_string()),
+        ..Default::default()
+    };
 
     // Cleanup should succeed and create the directory
     let report = db.cleanup_with_config(&config).unwrap();
