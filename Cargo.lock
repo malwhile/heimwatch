@@ -888,7 +888,9 @@ name = "heimwatch-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "heimwatch-core",
+ "log",
  "serde",
  "serde_json",
  "sled",

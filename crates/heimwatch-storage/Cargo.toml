@@ -5,7 +5,9 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 heimwatch-core.workspace = true
+log.workspace = true
 sled.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
