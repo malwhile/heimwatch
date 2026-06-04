@@ -890,6 +890,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "heimwatch-core",
+ "log",
  "serde",
  "serde_json",
  "sled",

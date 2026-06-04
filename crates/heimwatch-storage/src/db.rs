@@ -158,23 +158,7 @@ impl StorageLayer {
         if results.is_empty() {
             let raw_boundary = now.saturating_sub(24 * 3600);
             let daily_boundary = aggregation::month_bucket(now);
-            let monthly_boundary = {
-                if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
-                    let date = dt.date_naive();
-                    let subtract_months = chrono::Months::new(12);
-                    if let Some(new_date) = date.checked_sub_months(subtract_months) {
-                        if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
-                            midnight.and_utc().timestamp() as u64
-                        } else {
-                            now.saturating_sub(365 * 86400)
-                        }
-                    } else {
-                        now.saturating_sub(365 * 86400)
-                    }
-                } else {
-                    now.saturating_sub(365 * 86400)
-                }
-            };
+            let monthly_boundary = aggregation::subtract_months(now, 12);
 
             // Try daily tree
             if start < raw_boundary && results.is_empty() {
@@ -554,21 +538,7 @@ impl StorageLayer {
         config: &TieredRetentionConfig,
     ) -> Result<u64> {
         // Compute cutoff: start of the month that is monthly_keep_months ago
-        let cutoff = if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
-            let date = dt.date_naive();
-            let months_to_subtract = chrono::Months::new(config.monthly_keep_months);
-            if let Some(new_date) = date.checked_sub_months(months_to_subtract) {
-                if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
-                    midnight.and_utc().timestamp() as u64
-                } else {
-                    now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
-                }
-            } else {
-                now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
-            }
-        } else {
-            now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
-        };
+        let cutoff = aggregation::subtract_months(now, config.monthly_keep_months);
 
         let source_tree = self.metrics_1m_tree()?;
         let dest_tree = self.metrics_1y_tree()?;
@@ -670,40 +640,13 @@ impl StorageLayer {
 
         // Step 3: Aggregate monthly → yearly, then delete monthly
         let monthly_aggregated = self.aggregate_monthly_to_yearly(now, config)?;
-        let monthly_cutoff = if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
-            let date = dt.date_naive();
-            let subtract = chrono::Months::new(config.monthly_keep_months);
-            if let Some(new_date) = date.checked_sub_months(subtract) {
-                if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
-                    midnight.and_utc().timestamp() as u64
-                } else {
-                    now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
-                }
-            } else {
-                now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
-            }
-        } else {
-            now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
-        };
+        let monthly_cutoff = aggregation::subtract_months(now, config.monthly_keep_months);
         let monthly_deleted =
             self.delete_from_tree_before(&self.metrics_1m_tree()?, monthly_cutoff)?;
 
         // Step 4: Delete yearly records older than retention
-        let yearly_cutoff = if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
-            let date = dt.date_naive();
-            let subtract = chrono::Months::new(config.yearly_keep_years * 12);
-            if let Some(new_date) = date.checked_sub_months(subtract) {
-                if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
-                    midnight.and_utc().timestamp() as u64
-                } else {
-                    now.saturating_sub(config.yearly_keep_years as u64 * 365 * 86400)
-                }
-            } else {
-                now.saturating_sub(config.yearly_keep_years as u64 * 365 * 86400)
-            }
-        } else {
-            now.saturating_sub(config.yearly_keep_years as u64 * 365 * 86400)
-        };
+        let yearly_cutoff =
+            aggregation::subtract_months(now, config.yearly_keep_years.saturating_mul(12));
         let yearly_deleted =
             self.delete_from_tree_before(&self.metrics_1y_tree()?, yearly_cutoff)?;
 

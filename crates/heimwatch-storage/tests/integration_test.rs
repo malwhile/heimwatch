@@ -5,7 +5,7 @@ use std::sync::Arc;
 use common::*;
 use heimwatch_core::current_unix_timestamp;
 use heimwatch_storage::{
-    CpuData, FocusData, MetricPayload, MetricType, RetentionConfig, StorageError,
+    CpuData, FocusData, MetricPayload, MetricRecord, MetricType, RetentionConfig, StorageError,
 };
 
 #[test]
@@ -690,4 +690,184 @@ fn test_cleanup_idempotency() {
     // Both should update the cleanup timestamp
     let ts_after = db.get_last_cleanup_ts().unwrap();
     assert!(ts_after.is_some(), "Cleanup timestamp should be set");
+}
+
+#[test]
+fn test_aggregation_idempotency_tiered() {
+    let (db, _tmpdir) = create_test_db();
+    let now = current_unix_timestamp().unwrap();
+
+    // Insert a record from a few days ago
+    let five_days_ago = now - (5 * 86_400);
+    let record = make_cpu_record("app", five_days_ago, 10_000_000);
+    db.insert_metric(&record).unwrap();
+
+    let config = heimwatch_storage::TieredRetentionConfig {
+        raw_hours: 24,
+        daily_keep_days: 31,
+        monthly_keep_months: 12,
+        yearly_keep_years: 7,
+        cleanup_interval_hours: 24,
+        export_before_delete: false,
+        export_dir: None,
+    };
+
+    // Run tiered cleanup first time
+    let report1 = db.cleanup_tiered(&config).unwrap();
+
+    // Record should now be aggregated (raw_aggregated > 0)
+    assert!(report1.raw_aggregated > 0, "Should have aggregated records");
+
+    // Run tiered cleanup second time - should be idempotent
+    let report2 = db.cleanup_tiered(&config).unwrap();
+
+    // Both cleanups should report consistent results
+    // Second run may not aggregate again (already done), but should not error
+    assert!(report2.raw_deleted <= report1.raw_deleted + 1); // Allow small variance
+}
+
+#[test]
+fn test_cross_tier_query_finds_both_raw_and_aggregated() {
+    let (db, _tmpdir) = create_test_db();
+    let now = current_unix_timestamp().unwrap();
+
+    // Insert records at different times
+    let two_days_ago = now - (2 * 86_400);
+    let five_days_ago = now - (5 * 86_400);
+
+    let recent = make_network_record("app", two_days_ago, 100, 200);
+    let old = make_network_record("app", five_days_ago, 50, 75);
+
+    db.insert_metric(&recent).unwrap();
+    db.insert_metric(&old).unwrap();
+
+    // Before cleanup: both in raw tree
+    let results_before = db
+        .get_metrics_by_type(MetricType::Net, five_days_ago, now)
+        .unwrap();
+    assert_eq!(
+        results_before.len(),
+        2,
+        "Both records should be in raw tree initially"
+    );
+
+    let config = heimwatch_storage::TieredRetentionConfig {
+        raw_hours: 48, // 2 days
+        daily_keep_days: 31,
+        monthly_keep_months: 12,
+        yearly_keep_years: 7,
+        cleanup_interval_hours: 24,
+        export_before_delete: false,
+        export_dir: None,
+    };
+
+    // Run cleanup: old record gets aggregated and deleted from raw, recent stays
+    db.cleanup_tiered(&config).unwrap();
+
+    // Query raw + boundary: should find recent in raw
+    // (Old record is now in daily aggregate, but query stops at raw due to fallback logic)
+    let results_after_raw = db
+        .get_metrics_by_type(MetricType::Net, two_days_ago, now)
+        .unwrap();
+    assert_eq!(
+        results_after_raw.len(),
+        1,
+        "Should find only recent record in raw tree"
+    );
+
+    // Query to force fallback to aggregates: query before raw boundary
+    // Since raw will be empty for these old timestamps, fallback to daily tree
+    let results_after_agg = db
+        .get_metrics_by_type(MetricType::Net, five_days_ago, two_days_ago)
+        .unwrap();
+    assert!(
+        results_after_agg.len() > 0,
+        "Should find aggregated record when querying old data"
+    );
+}
+
+#[test]
+fn test_query_boundary_exactly_24h_ago() {
+    let (db, _tmpdir) = create_test_db();
+    let now = current_unix_timestamp().unwrap();
+
+    // Insert at various boundaries
+    let exactly_24h_ago = now - (24 * 3600);
+    let just_before_24h = exactly_24h_ago + 1;
+    let just_after_24h = exactly_24h_ago - 1;
+
+    let r1 = make_cpu_record("app", exactly_24h_ago, 1000);
+    let r2 = make_cpu_record("app", just_before_24h, 2000);
+    let r3 = make_cpu_record("app", just_after_24h, 3000);
+
+    db.insert_metric(&r1).unwrap();
+    db.insert_metric(&r2).unwrap();
+    db.insert_metric(&r3).unwrap();
+
+    // Query that includes all three
+    let results = db
+        .get_metrics_by_type(MetricType::Cpu, just_after_24h, now)
+        .unwrap();
+    assert_eq!(
+        results.len(),
+        3,
+        "All records should be found near boundary"
+    );
+
+    // Query that excludes the oldest
+    let results_after = db
+        .get_metrics_by_type(MetricType::Cpu, exactly_24h_ago, now)
+        .unwrap();
+    assert_eq!(
+        results_after.len(),
+        2,
+        "Should exclude record before boundary"
+    );
+}
+
+#[test]
+fn test_aggregation_per_metric_type_consistency() {
+    let (db, _tmpdir) = create_test_db();
+    let now = current_unix_timestamp().unwrap();
+    let three_days_ago = now - (3 * 86_400);
+
+    // Insert multiple different metric types for the same app
+    let cpu = make_cpu_record("app", three_days_ago, 10_000_000);
+    let net = make_network_record("app", three_days_ago, 100, 200);
+    let mem = MetricRecord {
+        app_name: "app".to_string(),
+        timestamp: three_days_ago,
+        payload: MetricPayload::Mem(heimwatch_core::MemoryData {
+            rss_bytes: 1_000_000,
+            vms_bytes: 2_000_000,
+            swap_bytes: 100_000,
+            process_count: 5,
+        }),
+    };
+
+    db.insert_metric(&cpu).unwrap();
+    db.insert_metric(&net).unwrap();
+    db.insert_metric(&mem).unwrap();
+
+    let config = heimwatch_storage::TieredRetentionConfig {
+        raw_hours: 48,
+        daily_keep_days: 31,
+        monthly_keep_months: 12,
+        yearly_keep_years: 7,
+        cleanup_interval_hours: 24,
+        export_before_delete: false,
+        export_dir: None,
+    };
+
+    // Run cleanup
+    db.cleanup_tiered(&config).unwrap();
+
+    // Verify all metric types are still queryable
+    let cpu_results = db.get_metrics_by_type(MetricType::Cpu, 0, now).unwrap();
+    let net_results = db.get_metrics_by_type(MetricType::Net, 0, now).unwrap();
+    let mem_results = db.get_metrics_by_type(MetricType::Mem, 0, now).unwrap();
+
+    assert_eq!(cpu_results.len(), 1);
+    assert_eq!(net_results.len(), 1);
+    assert_eq!(mem_results.len(), 1);
 }

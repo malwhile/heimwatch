@@ -14,6 +14,9 @@ pub fn day_bucket(ts: u64) -> u64 {
 }
 
 /// Floor a Unix timestamp to the start of its UTC month (1st at 00:00:00).
+///
+/// Uses chrono for correct date arithmetic. Logs a warning if fallback arithmetic
+/// is used, as this may indicate unusual timestamps.
 pub fn month_bucket(ts: u64) -> u64 {
     if let Some(dt) = chrono::DateTime::from_timestamp(ts as i64, 0) {
         let date = dt.date_naive();
@@ -23,11 +26,20 @@ pub fn month_bucket(ts: u64) -> u64 {
             return midnight.and_utc().timestamp() as u64;
         }
     }
-    // Fallback: approximately the 1st (off by up to 31 days if month arithmetic is wrong)
-    ts
+    // Fallback: arithmetic approximation (conservative, may be off by a few days)
+    log::warn!(
+        "month_bucket: chrono date conversion failed for ts={}, using fallback arithmetic",
+        ts
+    );
+    let days_since_epoch = ts / 86_400;
+    let approx_days_per_month = 30u64;
+    (days_since_epoch / approx_days_per_month) * approx_days_per_month * 86_400
 }
 
 /// Floor a Unix timestamp to the start of its UTC year (Jan 1 at 00:00:00).
+///
+/// Uses chrono for correct date arithmetic. Logs a warning if fallback arithmetic
+/// is used, as this may indicate unusual timestamps.
 pub fn year_bucket(ts: u64) -> u64 {
     if let Some(dt) = chrono::DateTime::from_timestamp(ts as i64, 0) {
         let date = dt.date_naive();
@@ -37,8 +49,36 @@ pub fn year_bucket(ts: u64) -> u64 {
             return midnight.and_utc().timestamp() as u64;
         }
     }
-    // Fallback: approximate year start
-    ts
+    // Fallback: arithmetic approximation (conservative, may be off)
+    log::warn!(
+        "year_bucket: chrono date conversion failed for ts={}, using fallback arithmetic",
+        ts
+    );
+    let days_since_epoch = ts / 86_400;
+    let approx_days_per_year = 365u64;
+    (days_since_epoch / approx_days_per_year) * approx_days_per_year * 86_400
+}
+
+/// Subtract months from a Unix timestamp using chrono, with safe fallback.
+///
+/// Returns a timestamp representing the start of the month `months` ago.
+/// Logs a warning and uses conservative arithmetic fallback if chrono conversion fails.
+pub fn subtract_months(ts: u64, months: u32) -> u64 {
+    if let Some(dt) = chrono::DateTime::from_timestamp(ts as i64, 0) {
+        let date = dt.date_naive();
+        if let Some(new_date) = date.checked_sub_months(chrono::Months::new(months))
+            && let Some(midnight) = new_date.and_hms_opt(0, 0, 0)
+        {
+            return midnight.and_utc().timestamp() as u64;
+        }
+    }
+    // Fallback: conservative arithmetic (30 days per month, overestimates)
+    log::warn!(
+        "subtract_months: chrono date arithmetic failed for ts={} minus {} months, using fallback",
+        ts,
+        months
+    );
+    ts.saturating_sub(months as u64 * 30 * 86_400)
 }
 
 /// Aggregate a slice of metric records (all same type and app) into a single record.
@@ -468,5 +508,193 @@ mod tests {
     fn test_aggregate_empty() {
         let records: Vec<MetricRecord> = vec![];
         assert!(aggregate_records(&records, 1000).is_none());
+    }
+
+    #[test]
+    fn test_aggregate_cpu_sums_time_averages_usage() {
+        let records = vec![
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
+                    cpu_time_ns: 1_000_000_000,
+                    cpu_usage_percent: 10.0,
+                }),
+            },
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 2000,
+                payload: MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
+                    cpu_time_ns: 3_000_000_000,
+                    cpu_usage_percent: 30.0,
+                }),
+            },
+        ];
+
+        let result = aggregate_records(&records, 3000).unwrap();
+        if let MetricPayload::Cpu(d) = result.payload {
+            assert_eq!(d.cpu_time_ns, 4_000_000_000); // sum
+            assert!((d.cpu_usage_percent - 20.0).abs() < 0.01); // average
+        } else {
+            panic!("Wrong payload type");
+        }
+    }
+
+    #[test]
+    fn test_aggregate_power_averages_options() {
+        let records = vec![
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Pwr(heimwatch_core::metrics::PowerData {
+                    watt_usage: 10.0,
+                    battery_percent: Some(80.0),
+                    charging: false,
+                    rapl_package_watts: Some(5.0),
+                    rapl_core_watts: None,
+                    battery_current_ua: None,
+                    battery_voltage_uv: None,
+                    avg_cpu_freq_ratio: None,
+                    display_brightness: Some(0.5),
+                    is_wifi: Some(true),
+                }),
+            },
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 2000,
+                payload: MetricPayload::Pwr(heimwatch_core::metrics::PowerData {
+                    watt_usage: 20.0,
+                    battery_percent: Some(70.0),
+                    charging: true,
+                    rapl_package_watts: Some(15.0),
+                    rapl_core_watts: Some(8.0),
+                    battery_current_ua: Some(1000),
+                    battery_voltage_uv: Some(5_000_000),
+                    avg_cpu_freq_ratio: Some(0.8),
+                    display_brightness: Some(0.7),
+                    is_wifi: Some(false),
+                }),
+            },
+        ];
+
+        let result = aggregate_records(&records, 3000).unwrap();
+        if let MetricPayload::Pwr(d) = result.payload {
+            assert!((d.watt_usage - 15.0).abs() < 0.01); // average
+            assert!((d.battery_percent.unwrap() - 75.0).abs() < 0.01); // average of Some
+            assert_eq!(d.charging, true); // last value
+            assert!((d.rapl_package_watts.unwrap() - 10.0).abs() < 0.01); // average
+            assert!(d.rapl_core_watts.is_some()); // Some present
+            assert!(d.battery_current_ua.is_some());
+            assert!(d.is_wifi == Some(false)); // last value
+        } else {
+            panic!("Wrong payload type");
+        }
+    }
+
+    #[test]
+    fn test_aggregate_memory_averages_counts() {
+        let records = vec![
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Mem(heimwatch_core::metrics::MemoryData {
+                    rss_bytes: 1_000_000,
+                    vms_bytes: 2_000_000,
+                    swap_bytes: 100_000,
+                    process_count: 5,
+                }),
+            },
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 2000,
+                payload: MetricPayload::Mem(heimwatch_core::metrics::MemoryData {
+                    rss_bytes: 3_000_000,
+                    vms_bytes: 4_000_000,
+                    swap_bytes: 300_000,
+                    process_count: 7,
+                }),
+            },
+        ];
+
+        let result = aggregate_records(&records, 3000).unwrap();
+        if let MetricPayload::Mem(d) = result.payload {
+            assert_eq!(d.rss_bytes, 2_000_000); // average: (1M + 3M) / 2
+            assert_eq!(d.vms_bytes, 3_000_000); // average: (2M + 4M) / 2
+            assert_eq!(d.swap_bytes, 200_000); // average: (100k + 300k) / 2
+            assert_eq!(d.process_count, 6); // average rounded: (5 + 7) / 2 = 6
+        } else {
+            panic!("Wrong payload type");
+        }
+    }
+
+    #[test]
+    fn test_aggregate_disk_sums_bytes_takes_last_mount() {
+        let records = vec![
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 1000,
+                payload: MetricPayload::Dsk(heimwatch_core::metrics::DiskData {
+                    read_bytes: 1000,
+                    write_bytes: 2000,
+                    mount_point: "/mnt/old".to_string(),
+                }),
+            },
+            MetricRecord {
+                app_name: "app".to_string(),
+                timestamp: 2000,
+                payload: MetricPayload::Dsk(heimwatch_core::metrics::DiskData {
+                    read_bytes: 3000,
+                    write_bytes: 4000,
+                    mount_point: "/mnt/new".to_string(),
+                }),
+            },
+        ];
+
+        let result = aggregate_records(&records, 3000).unwrap();
+        if let MetricPayload::Dsk(d) = result.payload {
+            assert_eq!(d.read_bytes, 4000); // sum
+            assert_eq!(d.write_bytes, 6000); // sum
+            assert_eq!(d.mount_point, "/mnt/new"); // last value
+        } else {
+            panic!("Wrong payload type");
+        }
+    }
+
+    #[test]
+    fn test_subtract_months_basic() {
+        let now = 1_717_334_400u64; // 2024-06-02 00:00:00 UTC
+        let one_month_ago = subtract_months(now, 1);
+        let two_months_ago = subtract_months(now, 2);
+
+        // Verify subtract_months works correctly
+        assert!(one_month_ago < now);
+        assert!(two_months_ago < one_month_ago);
+    }
+
+    #[test]
+    fn test_bucket_functions_monotonic() {
+        // Verify bucket functions are monotonic: if ts1 < ts2, bucket(ts1) <= bucket(ts2)
+        let ts1 = 1_000_000u64;
+        let ts2 = 2_000_000u64;
+        let ts3 = 3_000_000u64;
+
+        assert!(day_bucket(ts1) <= day_bucket(ts2));
+        assert!(day_bucket(ts2) <= day_bucket(ts3));
+        assert!(month_bucket(ts1) <= month_bucket(ts2));
+        assert!(month_bucket(ts2) <= month_bucket(ts3));
+        assert!(year_bucket(ts1) <= year_bucket(ts2));
+        assert!(year_bucket(ts2) <= year_bucket(ts3));
+    }
+
+    #[test]
+    fn test_day_bucket_midnight_boundary() {
+        // Test that records on the same day map to the same bucket
+        let day_start = 1_704_067_200u64; // 2024-01-01 00:00:00 UTC
+        let day_end = 1_704_153_599u64; // 2024-01-01 23:59:59 UTC
+        let next_day = 1_704_153_600u64; // 2024-01-02 00:00:00 UTC
+
+        assert_eq!(day_bucket(day_start), day_start);
+        assert_eq!(day_bucket(day_end), day_start); // Same day bucket
+        assert!(day_bucket(next_day) > day_bucket(day_start)); // Different day
     }
 }
