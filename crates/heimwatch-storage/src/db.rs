@@ -180,7 +180,8 @@ impl StorageLayer {
             if start < raw_boundary && results.is_empty() {
                 let tree = self.metrics_1d_tree()?;
                 let range_start = keys::range_start(&metric_type, start.max(daily_boundary));
-                let range_end = keys::range_end(&metric_type, end.min(raw_boundary.saturating_sub(1)));
+                let range_end =
+                    keys::range_end(&metric_type, end.min(raw_boundary.saturating_sub(1)));
                 for item in tree.range(range_start..=range_end) {
                     let (_key, value) = item?;
                     let record: MetricRecord = serde_json::from_slice(&value)?;
