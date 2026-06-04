@@ -581,7 +581,7 @@ mod tests {
         if let MetricPayload::Pwr(d) = result.payload {
             assert!((d.watt_usage - 15.0).abs() < 0.01); // average
             assert!((d.battery_percent.unwrap() - 75.0).abs() < 0.01); // average of Some
-            assert_eq!(d.charging, true); // last value
+            assert!(d.charging); // last value
             assert!((d.rapl_package_watts.unwrap() - 10.0).abs() < 0.01); // average
             assert!(d.rapl_core_watts.is_some()); // Some present
             assert!(d.battery_current_ua.is_some());

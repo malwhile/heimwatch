@@ -781,7 +781,7 @@ fn test_cross_tier_query_finds_both_raw_and_aggregated() {
         .get_metrics_by_type(MetricType::Net, five_days_ago, two_days_ago)
         .unwrap();
     assert!(
-        results_after_agg.len() > 0,
+        !results_after_agg.is_empty(),
         "Should find aggregated record when querying old data"
     );
 }
