@@ -84,3 +84,70 @@ pub struct StorageStats {
     pub record_counts: HashMap<MetricType, u64>,
     pub total_records: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TieredRetentionConfig {
+    #[serde(default = "default_raw_hours")]
+    pub raw_hours: u64,
+
+    #[serde(default = "default_daily_keep_days")]
+    pub daily_keep_days: u32,
+
+    #[serde(default = "default_monthly_keep_months")]
+    pub monthly_keep_months: u32,
+
+    #[serde(default = "default_yearly_keep_years")]
+    pub yearly_keep_years: u32,
+
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval_hours: u64,
+
+    #[serde(default)]
+    pub export_before_delete: bool,
+
+    #[serde(default)]
+    pub export_dir: Option<String>,
+}
+
+fn default_raw_hours() -> u64 {
+    24
+}
+
+fn default_daily_keep_days() -> u32 {
+    31
+}
+
+fn default_monthly_keep_months() -> u32 {
+    12
+}
+
+fn default_yearly_keep_years() -> u32 {
+    7
+}
+
+impl Default for TieredRetentionConfig {
+    fn default() -> Self {
+        Self {
+            raw_hours: 24,
+            daily_keep_days: 31,
+            monthly_keep_months: 12,
+            yearly_keep_years: 7,
+            cleanup_interval_hours: 24,
+            export_before_delete: false,
+            export_dir: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TieredCleanupReport {
+    pub raw_aggregated: u64,
+    pub raw_deleted: u64,
+    pub daily_aggregated: u64,
+    pub daily_deleted: u64,
+    pub monthly_aggregated: u64,
+    pub monthly_deleted: u64,
+    pub yearly_deleted: u64,
+    pub exported_count: u64,
+    pub export_path: Option<PathBuf>,
+}

@@ -6,18 +6,18 @@ use tempfile::NamedTempFile;
 #[test]
 fn test_daemon_config_defaults() {
     let config = DaemonConfig::default();
-    assert_eq!(config.retention.cpu_days, 7);
-    assert_eq!(config.retention.net_days, 7);
-    assert_eq!(config.retention.cleanup_interval_hours, 24);
-    assert!(!config.retention.export_before_delete);
+    assert_eq!(config.tiered_retention.raw_hours, 24);
+    assert_eq!(config.tiered_retention.daily_keep_days, 31);
+    assert_eq!(config.tiered_retention.cleanup_interval_hours, 24);
+    assert!(!config.tiered_retention.export_before_delete);
 }
 
 #[test]
 fn test_daemon_config_from_toml() {
     let toml_content = r#"
 [retention]
-cpu_days = 10
-net_days = 15
+raw_hours = 12
+daily_keep_days = 30
 cleanup_interval_hours = 12
 export_before_delete = false
 "#;
@@ -26,20 +26,20 @@ export_before_delete = false
     fs::write(file.path(), toml_content).unwrap();
 
     let config = DaemonConfig::load(file.path()).unwrap();
-    assert_eq!(config.retention.cpu_days, 10);
-    assert_eq!(config.retention.net_days, 15);
-    assert_eq!(config.retention.cleanup_interval_hours, 12);
-    assert!(!config.retention.export_before_delete);
+    assert_eq!(config.tiered_retention.raw_hours, 12);
+    assert_eq!(config.tiered_retention.daily_keep_days, 30);
+    assert_eq!(config.tiered_retention.cleanup_interval_hours, 12);
+    assert!(!config.tiered_retention.export_before_delete);
     // Unspecified fields should use defaults
-    assert_eq!(config.retention.pwr_days, 7);
-    assert_eq!(config.retention.dsk_days, 7);
+    assert_eq!(config.tiered_retention.monthly_keep_months, 12);
+    assert_eq!(config.tiered_retention.yearly_keep_years, 7);
 }
 
 #[test]
 fn test_daemon_config_with_export() {
     let toml_content = r#"
 [retention]
-cpu_days = 7
+raw_hours = 24
 cleanup_interval_hours = 24
 export_before_delete = true
 export_dir = "./exports"
@@ -49,8 +49,11 @@ export_dir = "./exports"
     fs::write(file.path(), toml_content).unwrap();
 
     let config = DaemonConfig::load(file.path()).unwrap();
-    assert!(config.retention.export_before_delete);
-    assert_eq!(config.retention.export_dir, Some("./exports".to_string()));
+    assert!(config.tiered_retention.export_before_delete);
+    assert_eq!(
+        config.tiered_retention.export_dir,
+        Some("./exports".to_string())
+    );
 }
 
 #[test]

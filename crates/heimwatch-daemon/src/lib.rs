@@ -145,7 +145,7 @@ pub async fn run(db_path: &str, config_path: Option<&str>) -> Result<()> {
 
     // Spawn cleanup task
     let storage_cleanup = Arc::clone(&storage);
-    let cleanup_config = config.retention.clone();
+    let cleanup_config = config.tiered_retention.clone();
     let cleanup_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
         let interval = Duration::from_secs(cleanup_config.cleanup_interval_hours * 3600);
@@ -154,11 +154,17 @@ pub async fn run(db_path: &str, config_path: Option<&str>) -> Result<()> {
             if *cleanup_shutdown.borrow() {
                 break;
             }
-            match storage_cleanup.cleanup_with_config(&cleanup_config) {
+            match tokio::task::block_in_place(|| storage_cleanup.cleanup_tiered(&cleanup_config)) {
                 Ok(report) => {
                     log::info!(
-                        "Cleanup: deleted={}, exported={}",
-                        report.deleted_count,
+                        "Cleanup tiered: raw_agg={}, raw_del={}, daily_agg={}, daily_del={}, monthly_agg={}, monthly_del={}, yearly_del={}, exported={}",
+                        report.raw_aggregated,
+                        report.raw_deleted,
+                        report.daily_aggregated,
+                        report.daily_deleted,
+                        report.monthly_aggregated,
+                        report.monthly_deleted,
+                        report.yearly_deleted,
                         report.exported_count
                     );
                     if let Ok(stats) = storage_cleanup.get_storage_stats() {

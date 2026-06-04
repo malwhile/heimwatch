@@ -1,13 +1,13 @@
 use anyhow::Result;
-use heimwatch_storage::RetentionConfig;
+use heimwatch_storage::TieredRetentionConfig;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DaemonConfig {
-    #[serde(default)]
-    pub retention: RetentionConfig,
+    #[serde(default, rename = "retention")]
+    pub tiered_retention: TieredRetentionConfig,
 }
 
 impl DaemonConfig {
@@ -45,34 +45,34 @@ mod tests {
             file,
             r#"
 [retention]
-cpu_days = 10
-net_days = 15
+raw_hours = 12
+daily_keep_days = 30
 cleanup_interval_hours = 12
 "#
         )
         .unwrap();
 
         let config = DaemonConfig::load(file.path()).unwrap();
-        assert_eq!(config.retention.cpu_days, 10);
-        assert_eq!(config.retention.net_days, 15);
-        assert_eq!(config.retention.cleanup_interval_hours, 12);
-        assert_eq!(config.retention.pwr_days, 7); // default
+        assert_eq!(config.tiered_retention.raw_hours, 12);
+        assert_eq!(config.tiered_retention.daily_keep_days, 30);
+        assert_eq!(config.tiered_retention.cleanup_interval_hours, 12);
+        assert_eq!(config.tiered_retention.monthly_keep_months, 12); // default
     }
 
     #[test]
     fn test_load_or_default_missing_file() {
         let path = Path::new("/tmp/nonexistent-heimwatch-config-12345.toml");
         let config = DaemonConfig::load_or_default(path);
-        assert_eq!(config.retention.cpu_days, 7);
-        assert_eq!(config.retention.cleanup_interval_hours, 24);
+        assert_eq!(config.tiered_retention.raw_hours, 24);
+        assert_eq!(config.tiered_retention.cleanup_interval_hours, 24);
     }
 
     #[test]
     fn test_default_config() {
         let config = DaemonConfig::default();
-        assert_eq!(config.retention.cpu_days, 7);
-        assert_eq!(config.retention.net_days, 7);
-        assert_eq!(config.retention.cleanup_interval_hours, 24);
-        assert!(!config.retention.export_before_delete);
+        assert_eq!(config.tiered_retention.raw_hours, 24);
+        assert_eq!(config.tiered_retention.daily_keep_days, 31);
+        assert_eq!(config.tiered_retention.cleanup_interval_hours, 24);
+        assert!(!config.tiered_retention.export_before_delete);
     }
 }

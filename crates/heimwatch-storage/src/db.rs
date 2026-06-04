@@ -8,10 +8,13 @@
 //! tokio::task::spawn_blocking(move || storage.insert_metric(&record)).await?
 //! ```
 
+use crate::aggregation;
 use crate::error::StorageError;
 use crate::keys;
 use crate::power_calc;
-use crate::retention::{CleanupReport, RetentionConfig, StorageStats};
+use crate::retention::{
+    CleanupReport, RetentionConfig, StorageStats, TieredCleanupReport, TieredRetentionConfig,
+};
 use anyhow::{Context, Result};
 use heimwatch_core::{
     AppFocusStats, AppNetworkStats, AppPowerStats, CpuData, DiskData, FocusData, GpuProcessData,
@@ -19,7 +22,7 @@ use heimwatch_core::{
     current_unix_timestamp,
 };
 use sled::Db;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -57,6 +60,21 @@ impl StorageLayer {
     /// Get the metadata tree, creating it if necessary.
     fn meta_tree(&self) -> Result<sled::Tree> {
         Ok(self.db.open_tree("meta")?)
+    }
+
+    /// Get the daily aggregates tree.
+    fn metrics_1d_tree(&self) -> Result<sled::Tree> {
+        Ok(self.db.open_tree("metrics_1d")?)
+    }
+
+    /// Get the monthly aggregates tree.
+    fn metrics_1m_tree(&self) -> Result<sled::Tree> {
+        Ok(self.db.open_tree("metrics_1m")?)
+    }
+
+    /// Get the yearly aggregates tree.
+    fn metrics_1y_tree(&self) -> Result<sled::Tree> {
+        Ok(self.db.open_tree("metrics_1y")?)
     }
 
     fn get_metadata<T: serde::de::DeserializeOwned>(
@@ -106,22 +124,99 @@ impl StorageLayer {
     }
 
     /// Retrieve all metrics of a specific type within a time range.
+    ///
+    /// Automatically routes queries across raw and aggregated tiers based on time range:
+    /// - Recent data (last 24h): from `metrics` tree (raw)
+    /// - Daily data (24h to start of month): from `metrics_1d` tree
+    /// - Monthly data (start of month to 12 months ago): from `metrics_1m` tree
+    /// - Yearly data (older than 12 months): from `metrics_1y` tree
+    ///
+    /// Falls back to raw tree for very old data (e.g., in tests or data before tiering was enabled).
     pub fn get_metrics_by_type(
         &self,
         metric_type: MetricType,
         start: u64,
         end: u64,
     ) -> Result<Vec<MetricRecord>> {
-        let tree = self.metrics_tree()?;
-        let range_start = keys::range_start(&metric_type, start);
-        let range_end = keys::range_end(&metric_type, end);
-
+        let now = current_unix_timestamp().unwrap_or(u64::MAX);
         let mut results = Vec::new();
-        for item in tree.range(range_start..=range_end) {
-            let (_key, value) = item?;
-            let record: MetricRecord = serde_json::from_slice(&value)?;
-            results.push(record);
+
+        // Always query raw tree first (highest priority for all data)
+        {
+            let tree = self.metrics_tree()?;
+            let range_start = keys::range_start(&metric_type, start);
+            let range_end = keys::range_end(&metric_type, end);
+            for item in tree.range(range_start..=range_end) {
+                let (_key, value) = item?;
+                let record: MetricRecord = serde_json::from_slice(&value)?;
+                results.push(record);
+            }
         }
+
+        // If nothing found in raw, try aggregate trees
+        // This handles the case where data was aggregated and removed from raw
+        if results.is_empty() {
+            let raw_boundary = now.saturating_sub(24 * 3600);
+            let daily_boundary = aggregation::month_bucket(now);
+            let monthly_boundary = {
+                if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
+                    let date = dt.date_naive();
+                    let subtract_months = chrono::Months::new(12);
+                    if let Some(new_date) = date.checked_sub_months(subtract_months) {
+                        if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
+                            midnight.and_utc().timestamp() as u64
+                        } else {
+                            now.saturating_sub(365 * 86400)
+                        }
+                    } else {
+                        now.saturating_sub(365 * 86400)
+                    }
+                } else {
+                    now.saturating_sub(365 * 86400)
+                }
+            };
+
+            // Try daily tree
+            if start < raw_boundary && results.is_empty() {
+                let tree = self.metrics_1d_tree()?;
+                let range_start = keys::range_start(&metric_type, start.max(daily_boundary));
+                let range_end = keys::range_end(&metric_type, end.min(raw_boundary.saturating_sub(1)));
+                for item in tree.range(range_start..=range_end) {
+                    let (_key, value) = item?;
+                    let record: MetricRecord = serde_json::from_slice(&value)?;
+                    results.push(record);
+                }
+            }
+
+            // Try monthly tree
+            if start < daily_boundary && results.is_empty() {
+                let tree = self.metrics_1m_tree()?;
+                let range_start = keys::range_start(&metric_type, start.max(monthly_boundary));
+                let range_end =
+                    keys::range_end(&metric_type, end.min(daily_boundary.saturating_sub(1)));
+                for item in tree.range(range_start..=range_end) {
+                    let (_key, value) = item?;
+                    let record: MetricRecord = serde_json::from_slice(&value)?;
+                    results.push(record);
+                }
+            }
+
+            // Try yearly tree
+            if start < monthly_boundary && results.is_empty() {
+                let tree = self.metrics_1y_tree()?;
+                let range_start = keys::range_start(&metric_type, start);
+                let range_end =
+                    keys::range_end(&metric_type, end.min(monthly_boundary.saturating_sub(1)));
+                for item in tree.range(range_start..=range_end) {
+                    let (_key, value) = item?;
+                    let record: MetricRecord = serde_json::from_slice(&value)?;
+                    results.push(record);
+                }
+            }
+        }
+
+        // Sort by timestamp ascending
+        results.sort_by_key(|r| r.timestamp);
         Ok(results)
     }
 
@@ -334,6 +429,295 @@ impl StorageLayer {
         Ok(CleanupReport {
             deleted_count: total_deleted,
             exported_count: total_exported,
+            export_path,
+        })
+    }
+
+    /// Delete records from a tree older than the given cutoff timestamp.
+    fn delete_from_tree_before(&self, tree: &sled::Tree, cutoff: u64) -> Result<u64> {
+        let mut keys_to_delete = Vec::new();
+
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
+            for item in tree.range(range_start..=range_end) {
+                let (key, _) = item?;
+                keys_to_delete.push(key.to_vec());
+            }
+        }
+
+        let count = keys_to_delete.len() as u64;
+        if count > 0 {
+            let mut batch = sled::Batch::default();
+            for key in keys_to_delete {
+                batch.remove(key);
+            }
+            tree.apply_batch(batch)?;
+        }
+
+        Ok(count)
+    }
+
+    /// Aggregate raw records to daily buckets.
+    pub fn aggregate_raw_to_daily(&self, now: u64, config: &TieredRetentionConfig) -> Result<u64> {
+        let cutoff = now.saturating_sub(config.raw_hours * 3600);
+        let source_tree = self.metrics_tree()?;
+        let dest_tree = self.metrics_1d_tree()?;
+
+        let mut total_written = 0u64;
+
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
+
+            // Group records by (day_bucket, app_name)
+            let mut groups: BTreeMap<(u64, String), Vec<MetricRecord>> = BTreeMap::new();
+
+            for item in source_tree.range(range_start..=range_end) {
+                let (_key, value) = item?;
+                let record: MetricRecord = serde_json::from_slice(&value)?;
+                let day_ts = aggregation::day_bucket(record.timestamp);
+                groups
+                    .entry((day_ts, record.app_name.clone()))
+                    .or_default()
+                    .push(record);
+            }
+
+            // Aggregate each group and write to dest tree
+            let mut batch = sled::Batch::default();
+            for ((_day_ts, app_name), records) in groups {
+                if let Some(agg) = aggregation::aggregate_records(&records, records[0].timestamp) {
+                    let key = keys::encode_key(metric_type, agg.timestamp, &app_name);
+                    let value = serde_json::to_vec(&agg)?;
+                    batch.insert(key, value);
+                    total_written += 1;
+                }
+            }
+
+            if total_written > 0 {
+                dest_tree.apply_batch(batch)?;
+            }
+        }
+
+        Ok(total_written)
+    }
+
+    /// Aggregate daily records to monthly buckets.
+    pub fn aggregate_daily_to_monthly(&self, now: u64) -> Result<u64> {
+        let cutoff = aggregation::month_bucket(now);
+        let source_tree = self.metrics_1d_tree()?;
+        let dest_tree = self.metrics_1m_tree()?;
+
+        let mut total_written = 0u64;
+
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
+
+            // Group records by (month_bucket, app_name)
+            let mut groups: BTreeMap<(u64, String), Vec<MetricRecord>> = BTreeMap::new();
+
+            for item in source_tree.range(range_start..=range_end) {
+                let (_key, value) = item?;
+                let record: MetricRecord = serde_json::from_slice(&value)?;
+                let month_ts = aggregation::month_bucket(record.timestamp);
+                groups
+                    .entry((month_ts, record.app_name.clone()))
+                    .or_default()
+                    .push(record);
+            }
+
+            // Aggregate each group and write to dest tree
+            let mut batch = sled::Batch::default();
+            for ((_month_ts, app_name), records) in groups {
+                if let Some(agg) = aggregation::aggregate_records(&records, records[0].timestamp) {
+                    let key = keys::encode_key(metric_type, agg.timestamp, &app_name);
+                    let value = serde_json::to_vec(&agg)?;
+                    batch.insert(key, value);
+                    total_written += 1;
+                }
+            }
+
+            if total_written > 0 {
+                dest_tree.apply_batch(batch)?;
+            }
+        }
+
+        Ok(total_written)
+    }
+
+    /// Aggregate monthly records to yearly buckets.
+    pub fn aggregate_monthly_to_yearly(
+        &self,
+        now: u64,
+        config: &TieredRetentionConfig,
+    ) -> Result<u64> {
+        // Compute cutoff: start of the month that is monthly_keep_months ago
+        let cutoff = if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
+            let date = dt.date_naive();
+            let months_to_subtract = chrono::Months::new(config.monthly_keep_months);
+            if let Some(new_date) = date.checked_sub_months(months_to_subtract) {
+                if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
+                    midnight.and_utc().timestamp() as u64
+                } else {
+                    now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
+                }
+            } else {
+                now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
+            }
+        } else {
+            now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
+        };
+
+        let source_tree = self.metrics_1m_tree()?;
+        let dest_tree = self.metrics_1y_tree()?;
+
+        let mut total_written = 0u64;
+
+        for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+            let range_start = keys::range_start(metric_type, 0);
+            let range_end = keys::range_end(metric_type, cutoff);
+
+            // Group records by (year_bucket, app_name)
+            let mut groups: BTreeMap<(u64, String), Vec<MetricRecord>> = BTreeMap::new();
+
+            for item in source_tree.range(range_start..=range_end) {
+                let (_key, value) = item?;
+                let record: MetricRecord = serde_json::from_slice(&value)?;
+                let year_ts = aggregation::year_bucket(record.timestamp);
+                groups
+                    .entry((year_ts, record.app_name.clone()))
+                    .or_default()
+                    .push(record);
+            }
+
+            // Aggregate each group and write to dest tree
+            let mut batch = sled::Batch::default();
+            for ((_year_ts, app_name), records) in groups {
+                if let Some(agg) = aggregation::aggregate_records(&records, records[0].timestamp) {
+                    let key = keys::encode_key(metric_type, agg.timestamp, &app_name);
+                    let value = serde_json::to_vec(&agg)?;
+                    batch.insert(key, value);
+                    total_written += 1;
+                }
+            }
+
+            if total_written > 0 {
+                dest_tree.apply_batch(batch)?;
+            }
+        }
+
+        Ok(total_written)
+    }
+
+    /// Perform cleanup with tiered retention configuration.
+    ///
+    /// Executes the full aggregation and deletion pipeline:
+    /// 1. Aggregate raw → daily, delete raw records
+    /// 2. Aggregate daily → monthly, delete daily records
+    /// 3. Aggregate monthly → yearly, delete monthly records
+    /// 4. Delete yearly records older than retention
+    pub fn cleanup_tiered(&self, config: &TieredRetentionConfig) -> Result<TieredCleanupReport> {
+        let now = current_unix_timestamp()?;
+
+        let mut export_path = None;
+        let mut exported_count = 0u64;
+
+        // Export raw records before deletion if configured
+        if config.export_before_delete
+            && let Some(dir) = &config.export_dir
+        {
+            fs::create_dir_all(dir)?;
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_nanos())
+                .unwrap_or(now as u128);
+            let export_filename = format!("export-{}.jsonl", nanos);
+            let export_file_path = Path::new(dir).join(&export_filename);
+
+            // Export raw records older than raw_hours
+            let cutoff = now.saturating_sub(config.raw_hours * 3600);
+            let tree = self.metrics_tree()?;
+            let mut file = fs::File::create(&export_file_path)?;
+
+            for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+                let range_start = keys::range_start(metric_type, 0);
+                let range_end = keys::range_end(metric_type, cutoff);
+
+                for item in tree.range(range_start..=range_end) {
+                    let (_key, value) = item?;
+                    let record: MetricRecord = serde_json::from_slice(&value)?;
+                    let line = serde_json::to_string(&record)?;
+                    writeln!(file, "{}", line)?;
+                    exported_count += 1;
+                }
+            }
+
+            export_path = Some(export_file_path);
+        }
+
+        // Step 1: Aggregate raw → daily, then delete raw
+        let raw_aggregated = self.aggregate_raw_to_daily(now, config)?;
+        let raw_cutoff = now.saturating_sub(config.raw_hours * 3600);
+        let raw_deleted = self.delete_from_tree_before(&self.metrics_tree()?, raw_cutoff)?;
+
+        // Step 2: Aggregate daily → monthly, then delete daily
+        let daily_aggregated = self.aggregate_daily_to_monthly(now)?;
+        let daily_cutoff = aggregation::month_bucket(now);
+        let daily_deleted = self.delete_from_tree_before(&self.metrics_1d_tree()?, daily_cutoff)?;
+
+        // Step 3: Aggregate monthly → yearly, then delete monthly
+        let monthly_aggregated = self.aggregate_monthly_to_yearly(now, config)?;
+        let monthly_cutoff = if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
+            let date = dt.date_naive();
+            let subtract = chrono::Months::new(config.monthly_keep_months);
+            if let Some(new_date) = date.checked_sub_months(subtract) {
+                if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
+                    midnight.and_utc().timestamp() as u64
+                } else {
+                    now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
+                }
+            } else {
+                now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
+            }
+        } else {
+            now.saturating_sub(config.monthly_keep_months as u64 * 30 * 86400)
+        };
+        let monthly_deleted =
+            self.delete_from_tree_before(&self.metrics_1m_tree()?, monthly_cutoff)?;
+
+        // Step 4: Delete yearly records older than retention
+        let yearly_cutoff = if let Some(dt) = chrono::DateTime::from_timestamp(now as i64, 0) {
+            let date = dt.date_naive();
+            let subtract = chrono::Months::new(config.yearly_keep_years * 12);
+            if let Some(new_date) = date.checked_sub_months(subtract) {
+                if let Some(midnight) = new_date.and_hms_opt(0, 0, 0) {
+                    midnight.and_utc().timestamp() as u64
+                } else {
+                    now.saturating_sub(config.yearly_keep_years as u64 * 365 * 86400)
+                }
+            } else {
+                now.saturating_sub(config.yearly_keep_years as u64 * 365 * 86400)
+            }
+        } else {
+            now.saturating_sub(config.yearly_keep_years as u64 * 365 * 86400)
+        };
+        let yearly_deleted =
+            self.delete_from_tree_before(&self.metrics_1y_tree()?, yearly_cutoff)?;
+
+        // Update last cleanup timestamp
+        self.set_last_cleanup_ts(now)?;
+
+        Ok(TieredCleanupReport {
+            raw_aggregated,
+            raw_deleted,
+            daily_aggregated,
+            daily_deleted,
+            monthly_aggregated,
+            monthly_deleted,
+            yearly_deleted,
+            exported_count,
             export_path,
         })
     }
