@@ -93,6 +93,13 @@ aya-ebpf = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya", rev = "4fbce44b6a49dd189a7a3520c66db45baf3832ea" }
 
 # ============================================================================
+# Terminal UI
+# ============================================================================
+ratatui   = { version = "0.29" }                              # Terminal UI rendering
+crossterm = { version = "0.28", features = ["event-stream"] } # Terminal backend + event streaming
+futures   = { version = "0.3" }                               # Stream trait + utilities
+
+# ============================================================================
 # Development & Testing
 # ============================================================================
 tempfile = { version = "3.8" } # Temporary file/directory creation for tests
