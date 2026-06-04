@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::app::App;
 
@@ -33,23 +33,24 @@ pub fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(cpu_color),
             ),
             Span::styled(
-                format!("  RAM: {:.1} GB ",
-                    snapshot.current_ram_mb as f32 / 1024.0),
+                format!("  RAM: {:.1} GB ", snapshot.current_ram_mb as f32 / 1024.0),
                 Style::default().fg(Color::Blue),
             ),
             Span::styled(
-                format!("  TX: {:.1} KB/s ",
-                    snapshot.current_net_tx as f32 / 1024.0),
+                format!("  TX: {:.1} KB/s ", snapshot.current_net_tx as f32 / 1024.0),
                 Style::default().fg(Color::Cyan),
             ),
             Span::styled(
-                format!("  RX: {:.1} KB/s ",
-                    snapshot.current_net_rx as f32 / 1024.0),
+                format!("  RX: {:.1} KB/s ", snapshot.current_net_rx as f32 / 1024.0),
                 Style::default().fg(Color::Cyan),
             ),
             Span::styled(
                 format!("  {} ", battery_str),
-                Style::default().fg(if snapshot.charging { Color::Green } else { Color::Yellow }),
+                Style::default().fg(if snapshot.charging {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
             ),
         ];
 

@@ -1,16 +1,15 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph, Sparkline};
-use ratatui::Frame;
 
 use crate::app::{App, Tab};
 
 pub fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
     match app.snapshot {
         None => {
-            let para = Paragraph::new("No data — waiting for refresh...").style(
-                Style::default().fg(ratatui::style::Color::DarkGray),
-            );
+            let para = Paragraph::new("No data — waiting for refresh...")
+                .style(Style::default().fg(ratatui::style::Color::DarkGray));
             f.render_widget(para, area);
         }
         Some(ref snapshot) => match app.active_tab {
@@ -87,7 +86,11 @@ fn draw_cpu_chart(f: &mut Frame, snapshot: &crate::data::AppSnapshot, area: Rect
     let bar_group = BarGroup::default().bars(
         &bars
             .iter()
-            .map(|(name, val)| Bar::default().value(*val).label(ratatui::text::Line::from(name.clone())))
+            .map(|(name, val)| {
+                Bar::default()
+                    .value(*val)
+                    .label(ratatui::text::Line::from(name.clone()))
+            })
             .collect::<Vec<_>>(),
     );
 
@@ -124,12 +127,20 @@ fn draw_focus_chart(f: &mut Frame, snapshot: &crate::data::AppSnapshot, area: Re
     let bar_group = BarGroup::default().bars(
         &bars
             .iter()
-            .map(|(name, val)| Bar::default().value(*val).label(ratatui::text::Line::from(name.clone())))
+            .map(|(name, val)| {
+                Bar::default()
+                    .value(*val)
+                    .label(ratatui::text::Line::from(name.clone()))
+            })
             .collect::<Vec<_>>(),
     );
 
     let chart = BarChart::default()
-        .block(Block::default().title(" Focus (minutes) ").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(" Focus (minutes) ")
+                .borders(Borders::ALL),
+        )
         .data(bar_group)
         .bar_width(7)
         .bar_gap(1)
@@ -161,7 +172,11 @@ fn draw_power_chart(f: &mut Frame, snapshot: &crate::data::AppSnapshot, area: Re
     let bar_group = BarGroup::default().bars(
         &bars
             .iter()
-            .map(|(name, val)| Bar::default().value(*val).label(ratatui::text::Line::from(name.clone())))
+            .map(|(name, val)| {
+                Bar::default()
+                    .value(*val)
+                    .label(ratatui::text::Line::from(name.clone()))
+            })
             .collect::<Vec<_>>(),
     );
 

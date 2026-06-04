@@ -1,7 +1,7 @@
 use anyhow::Result;
 use heimwatch_core::{
-    AppFocusStats, AppNetworkStats, AppPowerStats, MetricPayload, MetricRecord,
-    MetricType, current_unix_timestamp,
+    AppFocusStats, AppNetworkStats, AppPowerStats, MetricPayload, MetricRecord, MetricType,
+    current_unix_timestamp,
 };
 use heimwatch_storage::StorageLayer;
 use std::collections::HashMap;

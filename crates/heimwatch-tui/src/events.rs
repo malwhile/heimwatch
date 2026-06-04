@@ -1,13 +1,13 @@
-use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::data::{self, AppSnapshot};
 use heimwatch_storage::StorageLayer;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 pub enum AppEvent {
     Key(KeyEvent),
@@ -96,20 +96,22 @@ impl TuiApp {
         let tx = tx.clone();
 
         tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                data::load_snapshot(&storage, window)
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || data::load_snapshot(&storage, window)).await;
 
             match result {
                 Ok(Ok(snapshot)) => {
                     let _ = tx.send(AppEvent::DataReady(Box::new(snapshot))).await;
                 }
                 Ok(Err(e)) => {
-                    let _ = tx.send(AppEvent::DataError(format!("Data load failed: {}", e))).await;
+                    let _ = tx
+                        .send(AppEvent::DataError(format!("Data load failed: {}", e)))
+                        .await;
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::DataError(format!("Task error: {}", e))).await;
+                    let _ = tx
+                        .send(AppEvent::DataError(format!("Task error: {}", e)))
+                        .await;
                 }
             }
         });
