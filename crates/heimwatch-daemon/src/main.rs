@@ -17,8 +17,8 @@ use heimwatch_daemon::logging::{LogConfig, init_logging, parse_level};
 use heimwatch_daemon::{run, snapshot};
 
 #[derive(Parser, Debug)]
-#[command(name = "heimwatch-daemon")]
-#[command(about = "Heimwatch system monitoring daemon")]
+#[command(name = "heimwatch")]
+#[command(about = "Heimwatch system monitoring daemon and terminal interface")]
 struct Args {
     /// Log level (off, error, warn, info, debug, trace)
     #[arg(long, global = true, default_value = "info")]
@@ -39,6 +39,12 @@ enum Command {
         /// Configuration file path (TOML)
         #[arg(short, long, default_value = "./heimwatch.toml")]
         config: String,
+    },
+    /// View metrics in the terminal interface
+    Tui {
+        /// Database path (sled)
+        #[arg(short, long, default_value = "./heimwatch.db")]
+        db: String,
     },
     /// Capture a snapshot and print to stdout
     #[command(subcommand)]
@@ -153,6 +159,13 @@ async fn main() -> anyhow::Result<()> {
                 }
             );
             run(&db, Some(&config)).await?;
+        }
+        Command::Tui { db } => {
+            let storage = std::sync::Arc::new(
+                heimwatch_storage::StorageLayer::open(&db)
+                    .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?
+            );
+            heimwatch_tui::run(storage, db).await?;
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
             SnapshotCommand::Cpu { window, format } => {

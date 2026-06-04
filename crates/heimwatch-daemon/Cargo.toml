@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "heimwatch-daemon"
+name = "heimwatch"
 path = "src/main.rs"
 
 [dependencies]
@@ -12,6 +12,7 @@ anyhow.workspace = true
 heimwatch-core.workspace = true
 heimwatch-collector.workspace = true
 heimwatch-storage.workspace = true
+heimwatch-tui.workspace = true
 strum_macros.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "signal"] }
 clap.workspace = true
