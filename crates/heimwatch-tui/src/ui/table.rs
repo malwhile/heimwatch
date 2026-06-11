@@ -110,7 +110,8 @@ fn build_overview_table(
                 Cell::from(truncate(&cpu_stats.app_name, 22)).style(style),
                 Cell::from(format!("{:.1}%", cpu_stats.cpu_usage_percent)).style(style),
                 Cell::from(format!("{}MB", memory_mb)).style(style),
-                Cell::from(format!("↑{} ↓{}", fmt_bytes(tx_bytes), fmt_bytes(rx_bytes))).style(style),
+                Cell::from(format!("↑{} ↓{}", fmt_bytes(tx_bytes), fmt_bytes(rx_bytes)))
+                    .style(style),
             ])
         })
         .collect();

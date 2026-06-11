@@ -203,9 +203,18 @@ pub fn generate_test_data(db_path: &str, hours_back: u32, records_per_app: u32) 
     );
     println!();
     println!("To view the data in the TUI:");
-    println!("  1. Run: cargo run -p heimwatch-daemon -- tui --db {}", db_path);
-    println!("  2. Press '-' to shrink the time window to {} hours", hours_back);
-    println!("     (TUI defaults to 24 hours, but data spans only {} hours)", hours_back);
+    println!(
+        "  1. Run: cargo run -p heimwatch-daemon -- tui --db {}",
+        db_path
+    );
+    println!(
+        "  2. Press '-' to shrink the time window to {} hours",
+        hours_back
+    );
+    println!(
+        "     (TUI defaults to 24 hours, but data spans only {} hours)",
+        hours_back
+    );
     println!("  3. Navigate tabs with ← / → arrow keys to explore");
     println!("  4. Power tab will show realistic Display contribution after window adjustment");
 

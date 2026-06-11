@@ -189,8 +189,10 @@ fn aggregate_cpu_apps(cpu_records: &[MetricRecord]) -> Vec<AppCpuStats> {
         .into_iter()
         .map(|(app_name, data)| {
             let avg_cpu_pct = data.percentages.iter().sum::<f32>() / data.percentages.len() as f32;
-            let avg_threads = (data.threads.iter().sum::<u32>() as f64 / data.threads.len() as f64).round() as u32;
-            let avg_cpu_time = (data.times.iter().sum::<u64>() as f64 / data.times.len() as f64).round() as u64;
+            let avg_threads = (data.threads.iter().sum::<u32>() as f64 / data.threads.len() as f64)
+                .round() as u32;
+            let avg_cpu_time =
+                (data.times.iter().sum::<u64>() as f64 / data.times.len() as f64).round() as u64;
 
             AppCpuStats {
                 app_name,
