@@ -1,14 +1,14 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
 use crate::app::{App, Tab};
 
 pub fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
-    app.visible_height = area.height.saturating_sub(2);
+    app.visible_height = area.height.saturating_sub(3); // Account for header row
 
-    let (rows, title, column_widths) = match app.snapshot {
+    let (mut rows, title, column_widths) = match app.snapshot {
         None => (vec![], "Applications".to_string(), vec![]),
         Some(ref snapshot) => match app.active_tab {
             Tab::Overview => build_overview_table(snapshot, app.table_scroll, app.visible_height),
@@ -19,8 +19,44 @@ pub fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
         },
     };
 
+    // Add header row
+    let header_style = Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+    let header = match app.active_tab {
+        Tab::Overview => Row::new(vec![
+            Cell::from("App").style(header_style),
+            Cell::from("CPU").style(header_style),
+            Cell::from("Memory").style(header_style),
+            Cell::from("Network").style(header_style),
+        ]),
+        Tab::Network => Row::new(vec![
+            Cell::from("App").style(header_style),
+            Cell::from("TX").style(header_style),
+            Cell::from("RX").style(header_style),
+            Cell::from("Total").style(header_style),
+        ]),
+        Tab::Cpu => Row::new(vec![
+            Cell::from("App").style(header_style),
+            Cell::from("CPU %").style(header_style),
+            Cell::from("Threads").style(header_style),
+            Cell::from("CPU Time").style(header_style),
+        ]),
+        Tab::Focus => Row::new(vec![
+            Cell::from("App").style(header_style),
+            Cell::from("Duration").style(header_style),
+        ]),
+        Tab::Power => Row::new(vec![
+            Cell::from("App").style(header_style),
+            Cell::from("Power %").style(header_style),
+            Cell::from("CPU").style(header_style),
+            Cell::from("GPU").style(header_style),
+            Cell::from("Display").style(header_style),
+            Cell::from("Disk").style(header_style),
+        ]),
+    };
+    rows.insert(0, header);
+
     let total_count = app.current_tab_item_count();
-    let _displayed = rows.len();
+    let _displayed = rows.len().saturating_sub(1); // Don't count header
 
     let title_str = if total_count == 0 {
         format!(" {} (no data) ", title)
@@ -52,7 +88,7 @@ fn build_overview_table(
         .skip(scroll)
         .take(visible_height)
         .enumerate()
-        .map(|(i, (app, cpu_pct))| {
+        .map(|(i, cpu_stats)| {
             let is_selected = i == 0 && scroll < snapshot.top_cpu_apps.len();
             let style = if is_selected {
                 Style::default().bg(Color::DarkGray)
@@ -60,11 +96,21 @@ fn build_overview_table(
                 Style::default()
             };
 
+            // Find matching network and memory data for this app
+            let (tx_bytes, rx_bytes) = snapshot
+                .top_net_apps
+                .iter()
+                .find(|n| n.app_name == cpu_stats.app_name)
+                .map(|n| (n.tx_bytes, n.rx_bytes))
+                .unwrap_or((0, 0));
+
+            let memory_mb = snapshot.current_ram_mb / snapshot.top_cpu_apps.len().max(1) as u64;
+
             Row::new(vec![
-                Cell::from(truncate(app, 28)).style(style),
-                Cell::from(format!("{:.1}%", cpu_pct)).style(style),
-                Cell::from("—").style(style),
-                Cell::from("—").style(style),
+                Cell::from(truncate(&cpu_stats.app_name, 22)).style(style),
+                Cell::from(format!("{:.1}%", cpu_stats.cpu_usage_percent)).style(style),
+                Cell::from(format!("{}MB", memory_mb)).style(style),
+                Cell::from(format!("↑{} ↓{}", fmt_bytes(tx_bytes), fmt_bytes(rx_bytes))).style(style),
             ])
         })
         .collect();
@@ -73,10 +119,10 @@ fn build_overview_table(
         rows,
         "Applications".to_string(),
         vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
             Constraint::Percentage(40),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
         ],
     )
 }
@@ -134,7 +180,7 @@ fn build_cpu_table(
         .skip(scroll)
         .take(visible_height)
         .enumerate()
-        .map(|(i, (app, cpu_pct))| {
+        .map(|(i, cpu_stats)| {
             let is_selected = i == 0 && scroll < snapshot.top_cpu_apps.len();
             let style = if is_selected {
                 Style::default().bg(Color::DarkGray)
@@ -142,10 +188,20 @@ fn build_cpu_table(
                 Style::default()
             };
 
+            let cpu_time_secs = cpu_stats.cpu_time_ns / 1_000_000_000;
+            let cpu_time_str = if cpu_time_secs < 60 {
+                format!("{}s", cpu_time_secs)
+            } else if cpu_time_secs < 3600 {
+                format!("{}m", cpu_time_secs / 60)
+            } else {
+                format!("{}h", cpu_time_secs / 3600)
+            };
+
             Row::new(vec![
-                Cell::from(truncate(app, 28)).style(style),
-                Cell::from(format!("{:.1}%", cpu_pct)).style(style),
-                Cell::from("—").style(style),
+                Cell::from(truncate(&cpu_stats.app_name, 22)).style(style),
+                Cell::from(format!("{:.1}%", cpu_stats.cpu_usage_percent)).style(style),
+                Cell::from(format!("{}", cpu_stats.thread_count)).style(style),
+                Cell::from(cpu_time_str).style(style),
             ])
         })
         .collect();
@@ -154,9 +210,10 @@ fn build_cpu_table(
         rows,
         "CPU".to_string(),
         vec![
-            Constraint::Percentage(50),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
+            Constraint::Percentage(40),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
         ],
     )
 }

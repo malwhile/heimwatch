@@ -59,7 +59,7 @@ impl App {
             loading: false,
             error_message: None,
             should_quit: false,
-            time_window_secs: 3600,
+            time_window_secs: 86400, // 24 hours default
         }
     }
 

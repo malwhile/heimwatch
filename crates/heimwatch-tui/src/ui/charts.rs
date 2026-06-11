@@ -74,7 +74,12 @@ fn draw_cpu_chart(f: &mut Frame, snapshot: &crate::data::AppSnapshot, area: Rect
         .top_cpu_apps
         .iter()
         .take(10)
-        .map(|(app, pct)| (truncate_app_name(app), (*pct as u64).min(100)))
+        .map(|cpu_stats| {
+            (
+                truncate_app_name(&cpu_stats.app_name),
+                (cpu_stats.cpu_usage_percent as u64).min(100),
+            )
+        })
         .collect();
 
     if bars.is_empty() {

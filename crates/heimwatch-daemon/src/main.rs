@@ -60,6 +60,16 @@ enum Command {
         #[arg(long, default_value = "20")]
         records: u32,
     },
+    /// Debug: Query the database to verify data exists
+    DebugDb {
+        /// Database path (sled)
+        #[arg(short, long, default_value = "./heimwatch.db")]
+        db: String,
+
+        /// Hours to query back
+        #[arg(long, default_value = "24")]
+        hours: u32,
+    },
     /// Capture a snapshot and print to stdout
     #[command(subcommand)]
     Snapshot(SnapshotCommand),
@@ -194,6 +204,30 @@ async fn main() -> anyhow::Result<()> {
                 "Run `cargo run -p heimwatch-daemon -- tui --db {}` to view it",
                 db
             );
+        }
+        Command::DebugDb { db, hours } => {
+            let storage = heimwatch_storage::StorageLayer::open(&db)?;
+            let now = heimwatch_core::current_unix_timestamp()?;
+            let start = now.saturating_sub(hours as u64 * 3600);
+
+            println!("Database: {}", db);
+            println!("Query window: {} to {} ({} hours)", start, now, hours);
+            println!();
+
+            for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+                let records = storage.get_metrics_by_type(*metric_type, start, now)?;
+                println!("{:?}: {} records", metric_type, records.len());
+                if !records.is_empty() {
+                    let first = &records[0];
+                    let last = &records[records.len() - 1];
+                    let unique_apps = records
+                        .iter()
+                        .map(|r| &r.app_name)
+                        .collect::<std::collections::HashSet<_>>();
+                    println!("  Time range: {} to {}", first.timestamp, last.timestamp);
+                    println!("  Apps: {:?}", unique_apps);
+                }
+            }
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
             SnapshotCommand::Cpu { window, format } => {

@@ -6,6 +6,14 @@ use heimwatch_core::{
 use heimwatch_storage::StorageLayer;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
+pub struct AppCpuStats {
+    pub app_name: String,
+    pub cpu_usage_percent: f32,
+    pub thread_count: u32,
+    pub cpu_time_ns: u64,
+}
+
 pub struct AppSnapshot {
     pub cpu_series: Vec<u64>,
     pub mem_series: Vec<u64>,
@@ -23,7 +31,7 @@ pub struct AppSnapshot {
     pub top_net_apps: Vec<AppNetworkStats>,
     pub top_focus_apps: Vec<AppFocusStats>,
     pub top_power_apps: Vec<AppPowerStats>,
-    pub top_cpu_apps: Vec<(String, f32)>,
+    pub top_cpu_apps: Vec<AppCpuStats>,
 }
 
 pub fn load_snapshot(storage: &StorageLayer, window_secs: u64) -> Result<AppSnapshot> {
@@ -37,7 +45,7 @@ pub fn load_snapshot(storage: &StorageLayer, window_secs: u64) -> Result<AppSnap
 
     let cpu_series = downsample(&cpu_records, |r| {
         if let MetricPayload::Cpu(cpu) = &r.payload {
-            Some((cpu.cpu_usage_percent * 100.0) as u64)
+            Some((cpu.cpu_usage_percent) as u64)
         } else {
             None
         }
@@ -152,27 +160,52 @@ where
     }
 }
 
-fn aggregate_cpu_apps(cpu_records: &[MetricRecord]) -> Vec<(String, f32)> {
-    let mut app_cpus: HashMap<String, Vec<f32>> = HashMap::new();
+fn aggregate_cpu_apps(cpu_records: &[MetricRecord]) -> Vec<AppCpuStats> {
+    #[derive(Clone)]
+    struct CpuAggregate {
+        percentages: Vec<f32>,
+        threads: Vec<u32>,
+        times: Vec<u64>,
+    }
+
+    let mut app_data: HashMap<String, CpuAggregate> = HashMap::new();
 
     for record in cpu_records {
         if let MetricPayload::Cpu(cpu) = &record.payload {
-            app_cpus
+            let entry = app_data
                 .entry(record.app_name.clone())
-                .or_default()
-                .push(cpu.cpu_usage_percent);
+                .or_insert(CpuAggregate {
+                    percentages: Vec::new(),
+                    threads: Vec::new(),
+                    times: Vec::new(),
+                });
+            entry.percentages.push(cpu.cpu_usage_percent);
+            entry.threads.push(cpu.thread_count);
+            entry.times.push(cpu.cpu_time_ns);
         }
     }
 
-    let mut result: Vec<(String, f32)> = app_cpus
+    let mut result: Vec<AppCpuStats> = app_data
         .into_iter()
-        .map(|(app, cpus)| {
-            let avg = cpus.iter().sum::<f32>() / cpus.len() as f32;
-            (app, avg)
+        .map(|(app_name, data)| {
+            let avg_cpu_pct = data.percentages.iter().sum::<f32>() / data.percentages.len() as f32;
+            let avg_threads = (data.threads.iter().sum::<u32>() as f64 / data.threads.len() as f64).round() as u32;
+            let avg_cpu_time = (data.times.iter().sum::<u64>() as f64 / data.times.len() as f64).round() as u64;
+
+            AppCpuStats {
+                app_name,
+                cpu_usage_percent: avg_cpu_pct,
+                thread_count: avg_threads,
+                cpu_time_ns: avg_cpu_time,
+            }
         })
         .collect();
 
-    result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    result.sort_by(|a, b| {
+        b.cpu_usage_percent
+            .partial_cmp(&a.cpu_usage_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     result.truncate(20);
 
     result

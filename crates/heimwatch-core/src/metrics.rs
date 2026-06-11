@@ -87,6 +87,8 @@ pub struct CpuData {
     /// Percentage of total system CPU capacity used (0-100 × num_cores).
     /// Calculated as (cpu_time_ns / (interval_ns × num_cores)) × 100.
     pub cpu_usage_percent: f32,
+    /// Number of threads used by the application.
+    pub thread_count: u32,
 }
 
 /// Memory usage data (aggregated across all processes for an app).

@@ -143,6 +143,9 @@ impl TuiApp {
             (KeyCode::Char('q') | KeyCode::Char('Q'), _) => {
                 self.app.quit();
             }
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.app.quit();
+            }
             (KeyCode::Char('j') | KeyCode::Down, _) => {
                 self.app.scroll_down();
             }
