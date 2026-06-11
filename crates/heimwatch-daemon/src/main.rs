@@ -184,11 +184,16 @@ async fn main() -> anyhow::Result<()> {
         Command::TestData { db, hours, records } => {
             log::info!(
                 "Generating {} records per app over {} hours in {}",
-                records, hours, db
+                records,
+                hours,
+                db
             );
             test_data::generate_test_data(&db, hours, records)?;
             println!("Test database created at: {}", db);
-            println!("Run `cargo run -p heimwatch-daemon -- tui --db {}` to view it", db);
+            println!(
+                "Run `cargo run -p heimwatch-daemon -- tui --db {}` to view it",
+                db
+            );
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
             SnapshotCommand::Cpu { window, format } => {

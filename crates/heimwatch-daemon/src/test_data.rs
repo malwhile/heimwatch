@@ -10,14 +10,7 @@ use rand::Rng;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TEST_APPS: &[&str] = &[
-    "firefox",
-    "vscode",
-    "spotify",
-    "discord",
-    "slack",
-    "chrome",
-    "terminal",
-    "system",
+    "firefox", "vscode", "spotify", "discord", "slack", "chrome", "terminal", "system",
 ];
 
 pub fn generate_test_data(db_path: &str, hours_back: u32, records_per_app: u32) -> Result<()> {
@@ -35,7 +28,8 @@ pub fn generate_test_data(db_path: &str, hours_back: u32, records_per_app: u32) 
         let app_name = TEST_APPS[app_idx];
 
         for record_idx in 0..records_per_app {
-            let timestamp = now - (hours_back as u64 * 3600) + (record_idx as u64 * interval_seconds);
+            let timestamp =
+                now - (hours_back as u64 * 3600) + (record_idx as u64 * interval_seconds);
 
             // Network data
             let net_record = MetricRecord {
