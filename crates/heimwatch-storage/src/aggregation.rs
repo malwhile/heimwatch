@@ -118,17 +118,26 @@ pub fn aggregate_records(records: &[MetricRecord], bucket_ts: u64) -> Option<Met
             })
         }
         MetricPayload::Cpu(_) => {
-            let (time_sum, usage_sum) = records.iter().fold((0u64, 0.0), |(time, usage), r| {
-                if let MetricPayload::Cpu(d) = &r.payload {
-                    (time + d.cpu_time_ns, usage + d.cpu_usage_percent as f64)
-                } else {
-                    (time, usage)
-                }
-            });
+            let (time_sum, usage_sum, thread_sum) =
+                records
+                    .iter()
+                    .fold((0u64, 0.0, 0u32), |(time, usage, threads), r| {
+                        if let MetricPayload::Cpu(d) = &r.payload {
+                            (
+                                time + d.cpu_time_ns,
+                                usage + d.cpu_usage_percent as f64,
+                                threads + d.thread_count,
+                            )
+                        } else {
+                            (time, usage, threads)
+                        }
+                    });
             let usage_avg = (usage_sum / records.len() as f64) as f32;
+            let thread_avg = (thread_sum as f64 / records.len() as f64).round() as u32;
             MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
                 cpu_time_ns: time_sum,
                 cpu_usage_percent: usage_avg,
+                thread_count: thread_avg,
             })
         }
         MetricPayload::Mem(_) => {
@@ -519,6 +528,7 @@ mod tests {
                 payload: MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
                     cpu_time_ns: 1_000_000_000,
                     cpu_usage_percent: 10.0,
+                    thread_count: 1,
                 }),
             },
             MetricRecord {
@@ -527,6 +537,7 @@ mod tests {
                 payload: MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
                     cpu_time_ns: 3_000_000_000,
                     cpu_usage_percent: 30.0,
+                    thread_count: 1,
                 }),
             },
         ];

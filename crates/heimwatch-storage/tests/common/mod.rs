@@ -60,6 +60,7 @@ impl CpuMetricBuilder {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: self.cpu_time_ns,
                 cpu_usage_percent: self.cpu_usage_percent,
+                thread_count: 1,
             }),
         }
     }

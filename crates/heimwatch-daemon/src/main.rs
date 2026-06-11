@@ -14,11 +14,11 @@ use std::fs;
 
 use clap::{Parser, Subcommand};
 use heimwatch_daemon::logging::{LogConfig, init_logging, parse_level};
-use heimwatch_daemon::{run, snapshot};
+use heimwatch_daemon::{run, snapshot, test_data};
 
 #[derive(Parser, Debug)]
-#[command(name = "heimwatch-daemon")]
-#[command(about = "Heimwatch system monitoring daemon")]
+#[command(name = "heimwatch")]
+#[command(about = "Heimwatch system monitoring daemon and terminal interface")]
 struct Args {
     /// Log level (off, error, warn, info, debug, trace)
     #[arg(long, global = true, default_value = "info")]
@@ -39,6 +39,36 @@ enum Command {
         /// Configuration file path (TOML)
         #[arg(short, long, default_value = "./heimwatch.toml")]
         config: String,
+    },
+    /// View metrics in the terminal interface
+    Tui {
+        /// Database path (sled)
+        #[arg(short, long, default_value = "./heimwatch.db")]
+        db: String,
+    },
+    /// Generate test data for manual TUI testing
+    TestData {
+        /// Database path (sled)
+        #[arg(short, long, default_value = "./heimwatch.db")]
+        db: String,
+
+        /// Hours of historical data to generate
+        #[arg(long, default_value = "24")]
+        hours: u32,
+
+        /// Records per app to generate (distributed across the hours)
+        #[arg(long, default_value = "20")]
+        records: u32,
+    },
+    /// Debug: Query the database to verify data exists
+    DebugDb {
+        /// Database path (sled)
+        #[arg(short, long, default_value = "./heimwatch.db")]
+        db: String,
+
+        /// Hours to query back
+        #[arg(long, default_value = "24")]
+        hours: u32,
     },
     /// Capture a snapshot and print to stdout
     #[command(subcommand)]
@@ -153,6 +183,51 @@ async fn main() -> anyhow::Result<()> {
                 }
             );
             run(&db, Some(&config)).await?;
+        }
+        Command::Tui { db } => {
+            let storage = std::sync::Arc::new(
+                heimwatch_storage::StorageLayer::open(&db)
+                    .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?,
+            );
+            heimwatch_tui::run(storage, db).await?;
+        }
+        Command::TestData { db, hours, records } => {
+            log::info!(
+                "Generating {} records per app over {} hours in {}",
+                records,
+                hours,
+                db
+            );
+            test_data::generate_test_data(&db, hours, records)?;
+            println!("Test database created at: {}", db);
+            println!(
+                "Run `cargo run -p heimwatch-daemon -- tui --db {}` to view it",
+                db
+            );
+        }
+        Command::DebugDb { db, hours } => {
+            let storage = heimwatch_storage::StorageLayer::open(&db)?;
+            let now = heimwatch_core::current_unix_timestamp()?;
+            let start = now.saturating_sub(hours as u64 * 3600);
+
+            println!("Database: {}", db);
+            println!("Query window: {} to {} ({} hours)", start, now, hours);
+            println!();
+
+            for metric_type in heimwatch_core::ALL_METRIC_TYPES {
+                let records = storage.get_metrics_by_type(*metric_type, start, now)?;
+                println!("{:?}: {} records", metric_type, records.len());
+                if !records.is_empty() {
+                    let first = &records[0];
+                    let last = &records[records.len() - 1];
+                    let unique_apps = records
+                        .iter()
+                        .map(|r| &r.app_name)
+                        .collect::<std::collections::HashSet<_>>();
+                    println!("  Time range: {} to {}", first.timestamp, last.timestamp);
+                    println!("  Apps: {:?}", unique_apps);
+                }
+            }
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
             SnapshotCommand::Cpu { window, format } => {

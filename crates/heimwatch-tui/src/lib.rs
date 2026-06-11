@@ -1,14 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod app;
+pub mod data;
+pub mod events;
+pub mod ui;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use std::sync::Arc;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+use app::App;
+use events::TuiApp;
+use heimwatch_storage::StorageLayer;
+
+pub async fn run(storage: Arc<StorageLayer>, db_path: String) -> anyhow::Result<()> {
+    let app = App::new(db_path);
+    let tui_app = TuiApp::new(app, storage);
+    tui_app.run().await
 }

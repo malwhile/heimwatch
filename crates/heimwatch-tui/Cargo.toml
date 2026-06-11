@@ -4,3 +4,15 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+heimwatch-core.workspace = true
+heimwatch-storage.workspace = true
+
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+ratatui.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+clap.workspace = true
+chrono.workspace = true
+log.workspace = true
+env_logger.workspace = true

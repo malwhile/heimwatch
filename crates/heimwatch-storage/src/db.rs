@@ -1108,6 +1108,7 @@ impl StorageLayer {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use tempfile::TempDir;
 
@@ -1373,6 +1374,7 @@ mod tests {
                 payload: MetricPayload::Cpu(CpuData {
                     cpu_time_ns: 1_000_000_000,
                     cpu_usage_percent: (100.0 - (i as f32 * 10.0)),
+                    thread_count: 1,
                 }),
             })
             .unwrap();
@@ -1435,6 +1437,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1445,6 +1448,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1554,6 +1558,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1564,6 +1569,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1603,6 +1609,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 40.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1674,6 +1681,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1707,6 +1715,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1757,6 +1766,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1767,6 +1777,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 50.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1824,6 +1835,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 60.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
@@ -1834,6 +1846,7 @@ mod tests {
             payload: MetricPayload::Cpu(CpuData {
                 cpu_time_ns: 1_000_000_000,
                 cpu_usage_percent: 40.0,
+                thread_count: 1,
             }),
         })
         .unwrap();
