@@ -522,6 +522,7 @@ mod tests {
                 payload: MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
                     cpu_time_ns: 1_000_000_000,
                     cpu_usage_percent: 10.0,
+                    thread_count: 1,
                 }),
             },
             MetricRecord {
@@ -530,6 +531,7 @@ mod tests {
                 payload: MetricPayload::Cpu(heimwatch_core::metrics::CpuData {
                     cpu_time_ns: 3_000_000_000,
                     cpu_usage_percent: 30.0,
+                    thread_count: 1,
                 }),
             },
         ];
