@@ -133,8 +133,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # Job 5: Build Release Binaries & Upload Artifacts
   # ---------------------------------------------------------------------------
+  # Builds the heimwatch daemon binary (all commands are subcommands of this binary)
   build:
-    name: Build Release (${{ matrix.os }})
+    name: Build Daemon Binary (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: [lint, test, ebpf-check] # Only build if lint, test, and eBPF check pass
     strategy:
@@ -170,10 +171,10 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Release Binary
-        run: cargo build --release --target ${{ matrix.target }} --bin heimwatch
+      - name: Build heimwatch Daemon Binary (Release)
+        run: cargo build --release --target ${{ matrix.target }} -p heimwatch-daemon
 
-      - name: Upload Artifact
+      - name: Upload Artifact (heimwatch binary)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
