@@ -24,8 +24,8 @@ pub fn generate_test_data(db_path: &str, hours_back: u32, records_per_app: u32) 
 
     let interval_seconds = (hours_back as u64 * 3600) / records_per_app as u64;
 
-    for app_idx in 0..TEST_APPS.len() {
-        let app_name = TEST_APPS[app_idx];
+    for test_app in TEST_APPS {
+        let app_name = *test_app;
 
         for record_idx in 0..records_per_app {
             let timestamp =
