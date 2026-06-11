@@ -103,6 +103,7 @@ futures   = { version = "0.3" }                               # Stream trait + u
 # Development & Testing
 # ============================================================================
 tempfile = { version = "3.8" } # Temporary file/directory creation for tests
+rand = { version = "0.8" }     # Random number generation for test data
 
 [package]
 name = "heimwatch"

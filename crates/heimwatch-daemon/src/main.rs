@@ -14,7 +14,7 @@ use std::fs;
 
 use clap::{Parser, Subcommand};
 use heimwatch_daemon::logging::{LogConfig, init_logging, parse_level};
-use heimwatch_daemon::{run, snapshot};
+use heimwatch_daemon::{run, snapshot, test_data};
 
 #[derive(Parser, Debug)]
 #[command(name = "heimwatch")]
@@ -45,6 +45,20 @@ enum Command {
         /// Database path (sled)
         #[arg(short, long, default_value = "./heimwatch.db")]
         db: String,
+    },
+    /// Generate test data for manual TUI testing
+    TestData {
+        /// Database path (sled)
+        #[arg(short, long, default_value = "./heimwatch.db")]
+        db: String,
+
+        /// Hours of historical data to generate
+        #[arg(long, default_value = "24")]
+        hours: u32,
+
+        /// Records per app to generate (distributed across the hours)
+        #[arg(long, default_value = "20")]
+        records: u32,
     },
     /// Capture a snapshot and print to stdout
     #[command(subcommand)]
@@ -166,6 +180,15 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?,
             );
             heimwatch_tui::run(storage, db).await?;
+        }
+        Command::TestData { db, hours, records } => {
+            log::info!(
+                "Generating {} records per app over {} hours in {}",
+                records, hours, db
+            );
+            test_data::generate_test_data(&db, hours, records)?;
+            println!("Test database created at: {}", db);
+            println!("Run `cargo run -p heimwatch-daemon -- tui --db {}` to view it", db);
         }
         Command::Snapshot(snapshot_cmd) => match snapshot_cmd {
             SnapshotCommand::Cpu { window, format } => {

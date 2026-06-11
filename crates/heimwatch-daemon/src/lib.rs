@@ -4,6 +4,7 @@ pub mod config;
 pub mod logging;
 pub mod snapshot;
 pub mod table;
+pub mod test_data;
 
 use anyhow::Result;
 use config::DaemonConfig;
