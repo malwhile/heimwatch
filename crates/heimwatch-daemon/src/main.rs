@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Tui { db } => {
             let storage = std::sync::Arc::new(
                 heimwatch_storage::StorageLayer::open(&db)
-                    .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?
+                    .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?,
             );
             heimwatch_tui::run(storage, db).await?;
         }
